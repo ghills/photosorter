@@ -31,12 +31,13 @@ func main() {
 	}
 
 	fmt.Println("Initializing output directory and database cache...")
-	db, err := InitDB(*outFlag)
+	db, trackedCount, err := InitDB(*outFlag)
 	if err != nil {
 		fmt.Printf("Failed to initialize database: %v\n", err)
 		os.Exit(1)
 	}
 	defer db.Close()
+	fmt.Printf("Database cache loaded: %d files tracked.\n", trackedCount)
 
 	processor := NewProcessor(*zipFlag, *outFlag, db)
 	err = processor.Run()
