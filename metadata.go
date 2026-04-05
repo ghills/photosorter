@@ -130,6 +130,11 @@ func IsImage(filename string) bool {
 
 // IsMedia verifies if the filename extension is accepted by the photosorter pipeline.
 func IsMedia(filename string) bool {
+	// Ignore macOS hidden system files and resource forks
+	if strings.Contains(filename, "__MACOSX") || strings.HasPrefix(filepath.Base(filename), "._") {
+		return false
+	}
+
 	ext := strings.ToLower(filepath.Ext(filename))
 	switch ext {
 	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".bmp", ".tiff", ".tif", ".mp4", ".mov", ".avi", ".mkv", ".webm", ".mts", ".3gp", ".m4v":
