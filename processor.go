@@ -5,94 +5,132 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/schollz/progressbar/v3"
 )
 
 type Processor struct {
-	ZipPath    string
+	ZipPaths   []string
 	OutputDir  string
 	DB         *HashDB
-	ZipIndex   map[string]*zip.File
+	Workers    int
+	DryRun     bool
+	Logger     *log.Logger
 	TotalItems int
 }
 
-func NewProcessor(zipPath, outputDir string, db *HashDB) *Processor {
+func NewProcessor(zipPaths []string, outputDir string, db *HashDB, workers int, dryRun bool, logger *log.Logger) *Processor {
 	return &Processor{
-		ZipPath:   zipPath,
+		ZipPaths:  zipPaths,
 		OutputDir: outputDir,
 		DB:        db,
-		ZipIndex:  make(map[string]*zip.File),
+		Workers:   workers,
+		DryRun:    dryRun,
+		Logger:    logger,
 	}
 }
 
 func (p *Processor) Run() error {
-	r, err := zip.OpenReader(p.ZipPath)
-	if err != nil {
-		return fmt.Errorf("failed to open zip: %w", err)
-	}
-	defer r.Close()
+	var duplicatesSkipped int32
+	var countExif int32
+	var countJsonTaken int32
+	var countJsonCreation int32
+	var countFilename int32
+	var countUnknown int32
+	var errorsCount int32
 
-	// Build index
-	var mediaFiles []*zip.File
-	for _, f := range r.File {
-		if f.FileInfo().IsDir() {
+	for _, zipPath := range p.ZipPaths {
+		if p.Logger != nil {
+			p.Logger.Printf("Opening zip archive: %s", zipPath)
+		}
+		r, err := zip.OpenReader(zipPath)
+		if err != nil {
+			if p.Logger != nil {
+				p.Logger.Printf("Failed to open zip %s: %v", zipPath, err)
+			}
+			fmt.Printf("Failed to open zip %s: %v\n", zipPath, err)
 			continue
 		}
-		p.ZipIndex[f.Name] = f
-		if IsMedia(f.Name) {
-			mediaFiles = append(mediaFiles, f)
-		}
-	}
 
-	p.TotalItems = len(mediaFiles)
-	if p.TotalItems == 0 {
-		fmt.Println("No media files found in zip.")
-		return nil
-	}
-
-	bar := progressbar.Default(int64(p.TotalItems), "Processing media")
-
-	var duplicatesSkipped int
-	var countExif int
-	var countJsonTaken int
-	var countJsonCreation int
-	var countFilename int
-	var countUnknown int
-	var errorsCount int
-
-	for _, mF := range mediaFiles {
-		origin, err := p.processFile(mF)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "\nError processing %s: %v\n", mF.Name, err)
-			errorsCount++
-		} else {
-			switch origin {
-			case "skipped":
-				duplicatesSkipped++
-			case "exif":
-				countExif++
-			case "json_taken":
-				countJsonTaken++
-			case "json_creation":
-				countJsonCreation++
-			case "filename":
-				countFilename++
-			case "unknown":
-				countUnknown++
+		zipIndex := make(map[string]*zip.File)
+		var mediaFiles []*zip.File
+		for _, f := range r.File {
+			if f.FileInfo().IsDir() {
+				continue
+			}
+			zipIndex[f.Name] = f
+			if IsMedia(f.Name) {
+				mediaFiles = append(mediaFiles, f)
 			}
 		}
-		bar.Add(1)
+
+		if len(mediaFiles) == 0 {
+			r.Close()
+			continue
+		}
+
+		bar := progressbar.Default(int64(len(mediaFiles)), fmt.Sprintf("Processing %s", filepath.Base(zipPath)))
+
+		taskCh := make(chan *zip.File, len(mediaFiles))
+		for _, mF := range mediaFiles {
+			taskCh <- mF
+		}
+		close(taskCh)
+
+		var wg sync.WaitGroup
+		for i := 0; i < p.Workers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for mF := range taskCh {
+					origin, err := p.processFile(mF, zipIndex)
+					if err != nil {
+						if p.Logger != nil {
+							p.Logger.Printf("Error processing %s: %v", mF.Name, err)
+						}
+						atomic.AddInt32(&errorsCount, 1)
+					} else {
+						if origin == "skipped" {
+							atomic.AddInt32(&duplicatesSkipped, 1)
+						} else {
+							if p.Logger != nil {
+								p.Logger.Printf("Successfully organized: %s (via %s)", mF.Name, origin)
+							}
+							switch origin {
+							case "exif":
+								atomic.AddInt32(&countExif, 1)
+							case "json_taken":
+								atomic.AddInt32(&countJsonTaken, 1)
+							case "json_creation":
+								atomic.AddInt32(&countJsonCreation, 1)
+							case "filename":
+								atomic.AddInt32(&countFilename, 1)
+							case "unknown":
+								atomic.AddInt32(&countUnknown, 1)
+							}
+						}
+					}
+					bar.Add(1)
+				}
+			}()
+		}
+		wg.Wait()
+		r.Close()
 	}
 
 	totalOrganized := countExif + countJsonTaken + countJsonCreation + countFilename + countUnknown
 
 	fmt.Printf("\n\n--- Final Report ---\n")
-	fmt.Printf("Total Media Found        : %d\n", p.TotalItems)
+	if p.DryRun {
+		fmt.Printf("[DRY RUN MODE - No files were written]\n")
+	}
 	fmt.Printf("Successfully Organized   : %d\n", totalOrganized)
 	fmt.Printf("  └ via EXIF             : %d\n", countExif)
 	fmt.Printf("  └ via JSON (Taken)     : %d\n", countJsonTaken)
@@ -106,7 +144,7 @@ func (p *Processor) Run() error {
 }
 
 // processFile handles extracting a single file using a two-pass method to minimize disk writes.
-func (p *Processor) processFile(f *zip.File) (string, error) {
+func (p *Processor) processFile(f *zip.File, zipIndex map[string]*zip.File) (string, error) {
 	// PASS 1: Read the file strictly to calculate its hash
 	rc, err := f.Open()
 	if err != nil {
@@ -133,48 +171,55 @@ func (p *Processor) processFile(f *zip.File) (string, error) {
 	}
 
 	// 1. Determine destination path
-	captureTime, origin := FindCaptureDate(f, p.ZipIndex)
+	captureTime, origin := FindCaptureDate(f, zipIndex)
+	albumName := ExtractAlbumName(f.Name)
 
 	var folderDate string
-	if origin == "unknown" {
+	if albumName != "" {
+		folderDate = filepath.Join("Albums", albumName)
+	} else if origin == "unknown" {
 		folderDate = "Unknown_Date"
 	} else {
 		folderDate = captureTime.Format("2006-01-02")
 	}
 
 	destDir := filepath.Join(p.OutputDir, folderDate)
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return "", err
+	if !p.DryRun {
+		if err := os.MkdirAll(destDir, 0755); err != nil {
+			return "", err
+		}
 	}
 
 	baseName := filepath.Base(f.Name)
 	destPath := getUniqueDestPath(filepath.Join(destDir, baseName))
 
-	// PASS 2: Stream the uncompressed data AGAIN to write it to disk
-	rc2, err := f.Open()
-	if err != nil {
-		return "", err
-	}
-	defer rc2.Close()
+	if !p.DryRun {
+		// PASS 2: Stream the uncompressed data AGAIN to write it to disk
+		rc2, err := f.Open()
+		if err != nil {
+			return "", err
+		}
+		defer rc2.Close()
 
-	out, err := os.Create(destPath)
-	if err != nil {
-		return "", err
-	}
-	defer out.Close()
+		out, err := os.Create(destPath)
+		if err != nil {
+			return "", err
+		}
+		defer out.Close()
 
-	if _, err := io.Copy(out, rc2); err != nil {
-		return "", err
-	}
-	
-	// Graceful close of disk file
-	if err := out.Close(); err != nil {
-		return "", err
-	}
+		if _, err := io.Copy(out, rc2); err != nil {
+			return "", err
+		}
+		
+		// Graceful close of disk file
+		if err := out.Close(); err != nil {
+			return "", err
+		}
 
-	// Finalize record
-	if err := p.DB.Insert(hashStr, baseName); err != nil {
-		return "", err
+		// Finalize record
+		if err := p.DB.Insert(hashStr, baseName); err != nil {
+			return "", err
+		}
 	}
 
 	return origin, nil

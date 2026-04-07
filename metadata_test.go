@@ -146,3 +146,24 @@ func TestFindCaptureDate_JSONFallback(t *testing.T) {
 		t.Errorf("Expected time %v, got %v", expectedTime, captureDate)
 	}
 }
+
+func TestExtractAlbumName(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected string
+	}{
+		{"Takeout/Google Photos/Hawaii Trip 2023/IMG_1234.jpg", "Hawaii Trip 2023"},
+		{"Takeout/Google Photos/Photos from 2023/IMG_1234.jpg", ""},
+		{"Takeout/Google Photos/2023-01-01/IMG_1234.jpg", ""},
+		{"Takeout/Google Photos/Untitled Album/video.mp4", "Untitled Album"},
+		{"SomeOtherFolder/IMG_1234.jpg", ""},
+		{"Google Photos/Album at Root/file.png", "Album at Root"},
+	}
+
+	for _, tt := range tests {
+		result := ExtractAlbumName(tt.path)
+		if result != tt.expected {
+			t.Errorf("ExtractAlbumName(%q) = %q; want %q", tt.path, result, tt.expected)
+		}
+	}
+}

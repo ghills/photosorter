@@ -142,3 +142,31 @@ func IsMedia(filename string) bool {
 	}
 	return false
 }
+
+// ExtractAlbumName tries to extract a specific album name from a Google Takeout zip file path.
+// Takeout structure usually places albums in: "Takeout/Google Photos/Album Name/file.jpg"
+// Generic folders like "Photos from 2023" or dates like "2023-01-01" are ignored.
+func ExtractAlbumName(zipFilePath string) string {
+	parts := strings.Split(filepath.ToSlash(zipFilePath), "/")
+	
+	// We need at least 'Google Photos', an album name, and a file name
+	for i := 0; i < len(parts)-2; i++ {
+		if parts[i] == "Google Photos" {
+			folderName := parts[i+1]
+			
+			// Ignore standard date-based or generic folders that Google Photos creates
+			if strings.HasPrefix(folderName, "Photos from {") || strings.HasPrefix(folderName, "Photos from ") {
+				continue
+			}
+			
+			// Ignore YYYY-MM-DD
+			if dateRegex.MatchString(folderName) {
+				continue
+			}
+
+			return folderName
+		}
+	}
+	
+	return ""
+}

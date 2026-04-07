@@ -16,8 +16,11 @@ Instead of dealing with directories containing JSON sidecars, duplicate images, 
 - **Deduplication**: Uses a persistent SQLite database (`.photosorter_cache.db`) and `xxhash` to detect and skip duplicates to minimize disk writes. The database is optimized with WAL mode and prepared statements for better performance.
 - **Smart Library Synchronization**: Can gracefully reconcile with an existing output folder that contains organized media by hashing existing files before processing a new Takeout zip.
 - **Chronological Output**: Routes files into `YYYY-MM-DD` folders (e.g., `2023-05-14/`). Files lacking detectable dates are placed in an `Unknown_Date/` folder.
+- **Album Preservation**: Detects Google Photos Album organization within the Takeout zip and preserves it by routing those files to an `Albums/<Album Name>/` directory instead of generic date folders.
+- **Concurrent Processing**: Configurable goroutine worker pool (`-workers`) for rapid multi-threaded file hashing and extraction.
+- **Dry-Run Mode**: Safely test an extraction pass with `-dry-run` to view what actions would be taken without writing files to disk.
 - **Broad Media Support**: Supports common image and video formats. Automatically ignores macOS hidden system files and resource forks.
-- **Progress Reporting**: Provides a terminal progress bar and a final summary report of processed files, as well as the total number of tracked files in the database.
+- **Progress Reporting & Logging**: Provides a terminal progress bar, a final summary report, and outputs detailed logs to a file (`photosorter_*.log`) alongside the database.
 
 ## Installation
 
@@ -31,11 +34,17 @@ go build -o photosorter .
 
 ## Usage
 
-Provide the paths to your Takeout Zip and the destination folder:
+Provide the paths to your Takeout Zip and the destination folder. You can use glob patterns to process multiple zip files sequentially:
 
 ```bash
-./photosorter -zip <path_to_takeout.zip> -out <destination_folder>
+./photosorter -zip "takeout-*.zip" -out <destination_folder>
 ```
+
+### Advanced Flags
+
+- `-workers <number>`: Number of concurrent workers for processing (default 8).
+- `-dry-run`: Run a simulation of extraction and database insertion, without actually modifying the disk.
+- `-nosync`: Prevent automatic library sync from running.
 
 ### Syncing an Existing Library
 

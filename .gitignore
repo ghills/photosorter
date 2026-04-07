@@ -52,3 +52,6 @@ out/
 # Ignore generic large input archives (except the dummy test zip)
 *.zip
 !test_env/dummy.zip
+
+# Application Logs
+*.log
