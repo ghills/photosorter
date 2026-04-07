@@ -14,6 +14,7 @@ Instead of dealing with directories containing JSON sidecars, duplicate images, 
   2. **JSON Sidecars**: Parses Google Photos metadata sidecar files (`.json`) for `photoTakenTime` or `creationTime` timestamps if EXIF is not found.
   3. **Filename Parsing**: Extracts dates via regex from common camera filename patterns (e.g., `IMG_20230514_...`).
 - **Deduplication**: Uses a persistent SQLite database (`.photosorter_cache.db`) and `xxhash` to detect and skip duplicates to minimize disk writes. The database is optimized with WAL mode and prepared statements for better performance.
+- **Smart Library Synchronization**: Can gracefully reconcile with an existing output folder that contains organized media by hashing existing files before processing a new Takeout zip.
 - **Chronological Output**: Routes files into `YYYY-MM-DD` folders (e.g., `2023-05-14/`). Files lacking detectable dates are placed in an `Unknown_Date/` folder.
 - **Broad Media Support**: Supports common image and video formats. Automatically ignores macOS hidden system files and resource forks.
 - **Progress Reporting**: Provides a terminal progress bar and a final summary report of processed files, as well as the total number of tracked files in the database.
@@ -35,6 +36,16 @@ Provide the paths to your Takeout Zip and the destination folder:
 ```bash
 ./photosorter -zip <path_to_takeout.zip> -out <destination_folder>
 ```
+
+### Syncing an Existing Library
+
+If you already have a folder organized with photos and videos, you can synchronize its contents with the database using the `-sync` flag. This prevents duplicates if you process a new Takeout zip containing overlap:
+
+```bash
+./photosorter -out <destination_folder> -sync
+```
+
+*(Note: If you run the standard zip processing command, PhotoSorter will automatically run a sync check if it detects more physical media files in the destination than are recorded in the database.)*
 
 ### Example
 
