@@ -1,7 +1,6 @@
 package main
 
 import (
-	"archive/zip"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -17,7 +16,7 @@ import (
 )
 
 type Processor struct {
-	ZipPaths   []string
+	Sources    []InputSource
 	OutputDir  string
 	DB         *HashDB
 	Workers    int
@@ -26,9 +25,9 @@ type Processor struct {
 	TotalItems int
 }
 
-func NewProcessor(zipPaths []string, outputDir string, db *HashDB, workers int, dryRun bool, logger *log.Logger) *Processor {
+func NewProcessor(sources []InputSource, outputDir string, db *HashDB, workers int, dryRun bool, logger *log.Logger) *Processor {
 	return &Processor{
-		ZipPaths:  zipPaths,
+		Sources:   sources,
 		OutputDir: outputDir,
 		DB:        db,
 		Workers:   workers,
@@ -46,39 +45,28 @@ func (p *Processor) Run() error {
 	var countUnknown int32
 	var errorsCount int32
 
-	for _, zipPath := range p.ZipPaths {
+	for _, src := range p.Sources {
 		if p.Logger != nil {
-			p.Logger.Printf("Opening zip archive: %s", zipPath)
+			p.Logger.Printf("Scanning source: %s", src.Name())
 		}
-		r, err := zip.OpenReader(zipPath)
+		
+		mediaFiles, err := src.MediaFiles()
 		if err != nil {
 			if p.Logger != nil {
-				p.Logger.Printf("Failed to open zip %s: %v", zipPath, err)
+				p.Logger.Printf("Failed to scan source %s: %v", src.Name(), err)
 			}
-			fmt.Printf("Failed to open zip %s: %v\n", zipPath, err)
+			fmt.Printf("Failed to scan source %s: %v\n", src.Name(), err)
 			continue
-		}
-
-		zipIndex := make(map[string]*zip.File)
-		var mediaFiles []*zip.File
-		for _, f := range r.File {
-			if f.FileInfo().IsDir() {
-				continue
-			}
-			zipIndex[f.Name] = f
-			if IsMedia(f.Name) {
-				mediaFiles = append(mediaFiles, f)
-			}
 		}
 
 		if len(mediaFiles) == 0 {
-			r.Close()
+			src.Close()
 			continue
 		}
 
-		bar := progressbar.Default(int64(len(mediaFiles)), fmt.Sprintf("Processing %s", filepath.Base(zipPath)))
+		bar := progressbar.Default(int64(len(mediaFiles)), fmt.Sprintf("Processing %s", src.Name()))
 
-		taskCh := make(chan *zip.File, len(mediaFiles))
+		taskCh := make(chan MediaFile, len(mediaFiles))
 		for _, mF := range mediaFiles {
 			taskCh <- mF
 		}
@@ -90,18 +78,21 @@ func (p *Processor) Run() error {
 			go func() {
 				defer wg.Done()
 				for mF := range taskCh {
-					origin, err := p.processFile(mF, zipIndex)
+					origin, err := p.processFile(mF)
 					if err != nil {
 						if p.Logger != nil {
-							p.Logger.Printf("Error processing %s: %v", mF.Name, err)
+							p.Logger.Printf("Error processing %s: %v", mF.Name(), err)
 						}
 						atomic.AddInt32(&errorsCount, 1)
 					} else {
 						if origin == "skipped" {
 							atomic.AddInt32(&duplicatesSkipped, 1)
+							if p.Logger != nil {
+								p.Logger.Printf("Skipped duplicate: %s", mF.Name())
+							}
 						} else {
 							if p.Logger != nil {
-								p.Logger.Printf("Successfully organized: %s (via %s)", mF.Name, origin)
+								p.Logger.Printf("Successfully organized: %s (via %s)", mF.Name(), origin)
 							}
 							switch origin {
 							case "exif":
@@ -122,7 +113,7 @@ func (p *Processor) Run() error {
 			}()
 		}
 		wg.Wait()
-		r.Close()
+		src.Close()
 	}
 
 	totalOrganized := countExif + countJsonTaken + countJsonCreation + countFilename + countUnknown
@@ -144,7 +135,7 @@ func (p *Processor) Run() error {
 }
 
 // processFile handles extracting a single file using a two-pass method to minimize disk writes.
-func (p *Processor) processFile(f *zip.File, zipIndex map[string]*zip.File) (string, error) {
+func (p *Processor) processFile(f MediaFile) (string, error) {
 	// PASS 1: Read the file strictly to calculate its hash
 	rc, err := f.Open()
 	if err != nil {
@@ -171,8 +162,8 @@ func (p *Processor) processFile(f *zip.File, zipIndex map[string]*zip.File) (str
 	}
 
 	// 1. Determine destination path
-	captureTime, origin := FindCaptureDate(f, zipIndex)
-	albumName := ExtractAlbumName(f.Name)
+	captureTime, origin := FindCaptureDate(f)
+	albumName := ExtractAlbumName(f.Name())
 
 	var folderDate string
 	if albumName != "" {
@@ -190,7 +181,7 @@ func (p *Processor) processFile(f *zip.File, zipIndex map[string]*zip.File) (str
 		}
 	}
 
-	baseName := filepath.Base(f.Name)
+	baseName := filepath.Base(f.Name())
 	destPath := getUniqueDestPath(filepath.Join(destDir, baseName))
 
 	if !p.DryRun {

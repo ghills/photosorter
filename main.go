@@ -21,6 +21,7 @@ func main() {
 	}
 
 	zipFlag := flag.String("zip", "", "Path or glob pattern to the Google Photos takeout zip file(s)")
+	inFlag := flag.String("in", "", "Path to a local input folder of media files")
 	outFlag := flag.String("out", "", "Path to the output folder")
 	syncFlag := flag.Bool("sync", false, "Sync database with existing files in the output folder")
 	nosyncFlag := flag.Bool("nosync", false, "Prevent automatic library sync from running")
@@ -33,7 +34,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	var zipFiles []string
+	var sources []InputSource
+	
+	if *inFlag != "" {
+		_, err := os.Stat(*inFlag)
+		if err != nil {
+			fmt.Printf("Input directory does not exist or cannot be accessed: %s\n", *inFlag)
+			os.Exit(1)
+		}
+		sources = append(sources, NewLocalFolderSource(*inFlag))
+	}
+
 	if *zipFlag != "" {
 		if strings.Contains(*zipFlag, "*") || strings.Contains(*zipFlag, "?") {
 			matches, err := filepath.Glob(*zipFlag)
@@ -41,17 +52,26 @@ func main() {
 				fmt.Printf("No zip files matched pattern: %s\n", *zipFlag)
 				os.Exit(1)
 			}
-			zipFiles = matches
+			for _, m := range matches {
+				src, err := NewZipSource(m)
+				if err != nil {
+					fmt.Printf("Failed to open zip source %s: %v\n", m, err)
+					os.Exit(1)
+				}
+				sources = append(sources, src)
+			}
 		} else {
-			_, err := os.Stat(*zipFlag)
-			if os.IsNotExist(err) {
-				fmt.Printf("Input zip file does not exist: %s\n", *zipFlag)
+			src, err := NewZipSource(*zipFlag)
+			if err != nil {
+				fmt.Printf("Input zip file does not exist or is invalid: %s\n", *zipFlag)
 				os.Exit(1)
 			}
-			zipFiles = append(zipFiles, *zipFlag)
+			sources = append(sources, src)
 		}
-	} else if !*syncFlag {
-		fmt.Println("Usage: photosorter -zip <path> -out <path>  OR  photosorter -out <path> -sync")
+	} 
+	
+	if len(sources) == 0 && !*syncFlag {
+		fmt.Println("Usage: photosorter -in <path> -out <path>  OR  photosorter -zip <path> -out <path>")
 		os.Exit(1)
 	}
 
@@ -94,8 +114,8 @@ func main() {
 		logger = log.New(os.Stderr, "", log.LstdFlags)
 	}
 
-	if len(zipFiles) > 0 {
-		processor := NewProcessor(zipFiles, *outFlag, db, *workersFlag, *dryRunFlag, logger)
+	if len(sources) > 0 {
+		processor := NewProcessor(sources, *outFlag, db, *workersFlag, *dryRunFlag, logger)
 		err = processor.Run()
 		if err != nil {
 			fmt.Printf("Pipeline error: %v\n", err)

@@ -135,7 +135,12 @@ func TestFindCaptureDate_JSONFallback(t *testing.T) {
 		t.Fatalf("Media file not found in in-memory zip")
 	}
 
-	captureDate, origin := FindCaptureDate(mediaFile, zipIndex)
+	zmf := &ZipMediaFile{
+		f:        mediaFile,
+		zipIndex: zipIndex,
+	}
+
+	captureDate, origin := FindCaptureDate(zmf)
 	if origin != "json_taken" {
 		t.Errorf("Expected origin 'json_taken', got %q", origin)
 	}

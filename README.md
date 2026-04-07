@@ -8,7 +8,7 @@ Instead of dealing with directories containing JSON sidecars, duplicate images, 
 
 ## Features
 
-- **Direct ZIP Processing**: Processes files from the Takeout zip archive without requiring manual extraction to disk.
+- **Multiple Input Sources**: Processes files directly from Takeout zip archives without requiring manual extraction to disk, or processes standard media folders on your local filesystem.
 - **Date Detection Fallbacks**: Determines the capture date of media using a fallback strategy:
   1. **EXIF Metadata**: Reads EXIF headers directly from the zip stream, reading only the first 256KB of the file.
   2. **JSON Sidecars**: Parses Google Photos metadata sidecar files (`.json`) for `photoTakenTime` or `creationTime` timestamps if EXIF is not found.
@@ -34,13 +34,21 @@ go build -o photosorter .
 
 ## Usage
 
-Provide the paths to your Takeout Zip and the destination folder. You can use glob patterns to process multiple zip files sequentially:
+Provide the path to your Takeout Zip (or a local media directory) and the destination folder. You can use glob patterns to process multiple zip files sequentially:
 
 ```bash
 ./photosorter -zip "takeout-*.zip" -out <destination_folder>
 ```
 
+Alternatively, to process a local directory of media files instead of a zip file:
+
+```bash
+./photosorter -in /path/to/my/media -out <destination_folder>
+```
+
 ### Advanced Flags
+
+- `-in <path>`: Process an existing folder on your local filesystem instead of a zip file.
 
 - `-workers <number>`: Number of concurrent workers for processing (default 8).
 - `-dry-run`: Run a simulation of extraction and database insertion, without actually modifying the disk.

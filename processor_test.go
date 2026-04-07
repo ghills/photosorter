@@ -78,7 +78,11 @@ func TestProcessor_ProcessDuplicateAndNew(t *testing.T) {
 
 	// 3. Run processor
 	outDir := filepath.Join(tempDir, "out")
-	processor := NewProcessor([]string{zipPath}, outDir, db, 1, false, nil)
+	src, err := NewZipSource(zipPath)
+	if err != nil {
+		t.Fatalf("Error creating ZipSource: %v", err)
+	}
+	processor := NewProcessor([]InputSource{src}, outDir, db, 1, false, nil)
 	err = processor.Run()
 	if err != nil {
 		t.Fatalf("Processor Run error: %v", err)

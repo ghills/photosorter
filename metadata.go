@@ -1,7 +1,6 @@
 package main
 
 import (
-	"archive/zip"
 	"encoding/json"
 	"io"
 	"path/filepath"
@@ -50,9 +49,9 @@ type GooglePhotoMetadata struct {
 // It checks EXIF data first (reading a 256KB header), then checks associated Google Photos
 // metadata JSON sidecars, and finally falls back to parsing dates out of the filename.
 // Returns the parsed time object and the origin method used to find it.
-func FindCaptureDate(f *zip.File, zipIndex map[string]*zip.File) (time.Time, string) {
+func FindCaptureDate(f MediaFile) (time.Time, string) {
 	// First: Try reading Exif directly from zip stream
-	if IsImage(f.Name) {
+	if IsImage(f.Name()) {
 		rc, err := f.Open()
 		if err == nil {
 			lr := io.LimitReader(rc, 262144) // Check first 256KB for performance mapping
@@ -69,49 +68,36 @@ func FindCaptureDate(f *zip.File, zipIndex map[string]*zip.File) (time.Time, str
 	}
 
 	// Second: fallback to JSON sidecar metadata
-	base := strings.TrimSuffix(f.Name, filepath.Ext(f.Name))
+	base := strings.TrimSuffix(f.Name(), filepath.Ext(f.Name()))
 	jsonFilesToTry := []string{
-		f.Name + ".json",
-		f.Name + ".supplemental-metadata.json",
+		f.Name() + ".json",
+		f.Name() + ".supplemental-metadata.json",
 		base + ".json",
 		base + ".supplemental-metadata.json",
 	}
 
-	var jsonFile *zip.File
-	var ok bool
-	for _, name := range jsonFilesToTry {
-		if jf, found := zipIndex[name]; found {
-			jsonFile = jf
-			ok = true
-			break
-		}
-	}
-	
-	if ok {
-		jrc, err := jsonFile.Open()
+	if jrc, ok := f.OpenSidecar(jsonFilesToTry); ok {
+		var metadata GooglePhotoMetadata
+		err := json.NewDecoder(jrc).Decode(&metadata)
+		jrc.Close()
 		if err == nil {
-			var metadata GooglePhotoMetadata
-			err = json.NewDecoder(jrc).Decode(&metadata)
-			jrc.Close()
-			if err == nil {
-				if metadata.PhotoTakenTime.Timestamp != "" {
-					ts, err := strconv.ParseInt(metadata.PhotoTakenTime.Timestamp, 10, 64)
-					if err == nil && ts > 0 {
-						return time.Unix(ts, 0), "json_taken"
-					}
+			if metadata.PhotoTakenTime.Timestamp != "" {
+				ts, err := strconv.ParseInt(metadata.PhotoTakenTime.Timestamp, 10, 64)
+				if err == nil && ts > 0 {
+					return time.Unix(ts, 0), "json_taken"
 				}
-				if metadata.CreationTime.Timestamp != "" {
-					ts, err := strconv.ParseInt(metadata.CreationTime.Timestamp, 10, 64)
-					if err == nil && ts > 0 {
-						return time.Unix(ts, 0), "json_creation"
-					}
+			}
+			if metadata.CreationTime.Timestamp != "" {
+				ts, err := strconv.ParseInt(metadata.CreationTime.Timestamp, 10, 64)
+				if err == nil && ts > 0 {
+					return time.Unix(ts, 0), "json_creation"
 				}
 			}
 		}
 	}
 
 	// Third: Fallback to reading the date from filename
-	if tm, found := parseDateFromFilename(f.Name); found {
+	if tm, found := parseDateFromFilename(f.Name()); found {
 		return tm, "filename"
 	}
 
@@ -144,11 +130,11 @@ func IsMedia(filename string) bool {
 	return false
 }
 
-// ExtractAlbumName tries to extract a specific album name from a Google Takeout zip file path.
+// ExtractAlbumName tries to extract a specific album name from a file path.
 // Takeout structure usually places albums in: "Takeout/Google Photos/Album Name/file.jpg"
 // Generic folders like "Photos from 2023" or dates like "2023-01-01" are ignored.
-func ExtractAlbumName(zipFilePath string) string {
-	parts := strings.Split(filepath.ToSlash(zipFilePath), "/")
+func ExtractAlbumName(filePath string) string {
+	parts := strings.Split(filepath.ToSlash(filePath), "/")
 	
 	// We need at least 'Google Photos', an album name, and a file name
 	for i := 0; i < len(parts)-2; i++ {
