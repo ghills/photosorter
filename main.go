@@ -10,7 +10,7 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "PhotoSorter - Google Photos Takeout Organizer\n\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage:\n")
-		fmt.Fprintf(flag.CommandLine.Output(), "  photosorter -zip <takeout.zip> -out <destination_folder>\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "  photosorter -zip <takeout.zip> -out <destination_folder> [-nosync]\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "  photosorter -out <destination_folder> -sync\n\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "Flags:\n")
 		flag.PrintDefaults()
@@ -19,6 +19,7 @@ func main() {
 	zipFlag := flag.String("zip", "", "Path to the Google Photos takeout zip file")
 	outFlag := flag.String("out", "", "Path to the output folder")
 	syncFlag := flag.Bool("sync", false, "Sync database with existing files in the output folder")
+	nosyncFlag := flag.Bool("nosync", false, "Prevent automatic library sync from running")
 	flag.Parse()
 
 	if *outFlag == "" {
@@ -47,7 +48,7 @@ func main() {
 	fmt.Printf("Database cache loaded: %d files tracked.\n", trackedCount)
 
 	needsSync := *syncFlag
-	if !needsSync {
+	if !needsSync && !*nosyncFlag {
 		mediaCount, _ := CountMediaFiles(*outFlag)
 		// Small buffer: if the output folder has more media files than what the DB tracks, auto-sync.
 		if mediaCount > trackedCount {

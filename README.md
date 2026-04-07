@@ -45,7 +45,7 @@ If you already have a folder organized with photos and videos, you can synchroni
 ./photosorter -out <destination_folder> -sync
 ```
 
-*(Note: If you run the standard zip processing command, PhotoSorter will automatically run a sync check if it detects more physical media files in the destination than are recorded in the database.)*
+*(Note: If you run the standard zip processing command, PhotoSorter will automatically run a sync check if it detects more physical media files in the destination than are recorded in the database. You can disable this automatic check by passing the `-nosync` flag.)*
 
 ### Example
 
