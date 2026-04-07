@@ -14,6 +14,7 @@ import (
 )
 
 var dateRegex = regexp.MustCompile(`(?i)(?:^|IMG[-_]?|VID[-_]?|Screenshot[-_]?|WhatsApp Image )?((?:19|20)\d{2})[-_]?(\d{2})[-_]?(\d{2})`)
+var dateFolderRegex = regexp.MustCompile(`^(?:19|20)\d{2}-\d{2}-\d{2}$`)
 
 // parseDateFromFilename attempts to extract dates from typical camera filename patterns.
 func parseDateFromFilename(filename string) (time.Time, bool) {
@@ -159,8 +160,8 @@ func ExtractAlbumName(zipFilePath string) string {
 				continue
 			}
 			
-			// Ignore YYYY-MM-DD
-			if dateRegex.MatchString(folderName) {
+			// Ignore exactly YYYY-MM-DD
+			if dateFolderRegex.MatchString(folderName) {
 				continue
 			}
 
