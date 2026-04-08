@@ -11,7 +11,7 @@ func TestGetUniqueDestPath(t *testing.T) {
 	tempDir := t.TempDir()
 
 	basePath := filepath.Join(tempDir, "test.jpg")
-	
+
 	// Should return the base path since it doesn't exist yet
 	got := getUniqueDestPath(basePath)
 	if got != basePath {
@@ -56,9 +56,9 @@ func TestProcessor_ProcessDuplicateAndNew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Error creating zip file: %v", err)
 	}
-	
+
 	zw := zip.NewWriter(zipFile)
-	
+
 	// File 1: IMG_20230101.jpg
 	f1, err := zw.Create("IMG_20230101.jpg")
 	if err != nil {
@@ -72,7 +72,7 @@ func TestProcessor_ProcessDuplicateAndNew(t *testing.T) {
 		t.Fatalf("Error creating zip entry: %v", err)
 	}
 	f2.Write([]byte("image content A"))
-	
+
 	zw.Close()
 	zipFile.Close()
 

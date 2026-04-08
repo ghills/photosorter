@@ -29,7 +29,7 @@ func CountMediaFiles(dir string) (int, error) {
 // SyncFolderWithDB hashes all media files in the target directory and inserts them into the DB.
 func SyncFolderWithDB(dir string, db *HashDB) error {
 	var mediaFiles []string
-	
+
 	fmt.Println("Scanning directory for media files...")
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -58,7 +58,7 @@ func SyncFolderWithDB(dir string, db *HashDB) error {
 		}
 		bar.Add(1)
 	}
-	
+
 	fmt.Println("\nSync complete.")
 	return nil
 }

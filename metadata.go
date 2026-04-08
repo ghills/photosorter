@@ -23,7 +23,7 @@ func parseDateFromFilename(filename string) (time.Time, bool) {
 		year, _ := strconv.Atoi(matches[1])
 		month, _ := strconv.Atoi(matches[2])
 		day, _ := strconv.Atoi(matches[3])
-		
+
 		if month >= 1 && month <= 12 && day >= 1 && day <= 31 {
 			// Using Local timezone closely matches our Unix timestamp parsing standard
 			return time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.Local), true
@@ -33,9 +33,9 @@ func parseDateFromFilename(filename string) (time.Time, bool) {
 }
 
 type GooglePhotoMetadata struct {
-	Title          string `json:"title"`
-	Description    string `json:"description"`
-	CreationTime   struct {
+	Title        string `json:"title"`
+	Description  string `json:"description"`
+	CreationTime struct {
 		Timestamp string `json:"timestamp"`
 		Formatted string `json:"formatted"`
 	} `json:"creationTime"`
@@ -135,17 +135,17 @@ func IsMedia(filename string) bool {
 // Generic folders like "Photos from 2023" or dates like "2023-01-01" are ignored.
 func ExtractAlbumName(filePath string) string {
 	parts := strings.Split(filepath.ToSlash(filePath), "/")
-	
+
 	// We need at least 'Google Photos', an album name, and a file name
 	for i := 0; i < len(parts)-2; i++ {
 		if parts[i] == "Google Photos" {
 			folderName := parts[i+1]
-			
+
 			// Ignore standard date-based or generic folders that Google Photos creates
 			if strings.HasPrefix(folderName, "Photos from {") || strings.HasPrefix(folderName, "Photos from ") {
 				continue
 			}
-			
+
 			// Ignore exactly YYYY-MM-DD
 			if dateFolderRegex.MatchString(folderName) {
 				continue
@@ -154,6 +154,6 @@ func ExtractAlbumName(filePath string) string {
 			return folderName
 		}
 	}
-	
+
 	return ""
 }

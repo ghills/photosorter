@@ -35,7 +35,7 @@ func main() {
 	}
 
 	var sources []InputSource
-	
+
 	if *inFlag != "" {
 		_, err := os.Stat(*inFlag)
 		if err != nil {
@@ -68,8 +68,8 @@ func main() {
 			}
 			sources = append(sources, src)
 		}
-	} 
-	
+	}
+
 	if len(sources) == 0 && !*syncFlag {
 		fmt.Println("Usage: photosorter -in <path> -out <path>  OR  photosorter -zip <path> -out <path>")
 		os.Exit(1)
@@ -84,13 +84,17 @@ func main() {
 	defer db.Close()
 	fmt.Printf("Database cache loaded: %d files tracked.\n", trackedCount)
 
+	// check for auto-sync conditions
 	needsSync := *syncFlag
 	if !needsSync && !*nosyncFlag {
+		fmt.Println("Counting files in library...")
 		mediaCount, _ := CountMediaFiles(*outFlag)
-		// Small buffer: if the output folder has more media files than what the DB tracks, auto-sync.
-		if mediaCount > trackedCount {
-			fmt.Printf("Detected %d physical media files but only %d in database. Auto-syncing...\n", mediaCount, trackedCount)
+		// need to initialize database if no hashes are saved yet
+		if mediaCount > 0 && trackedCount == 0 {
+			fmt.Printf("Detected %d physical media files but database has not been built. Auto-syncing...\n", mediaCount)
 			needsSync = true
+		} else if mediaCount > trackedCount {
+			fmt.Printf("Warning: Detected %d physical media files but only %d in database. Database may need to be synced...\n", mediaCount, trackedCount)
 		}
 	}
 
@@ -122,6 +126,6 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	
+
 	fmt.Println("Done!")
 }

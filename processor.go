@@ -49,7 +49,7 @@ func (p *Processor) Run() error {
 		if p.Logger != nil {
 			p.Logger.Printf("Scanning source: %s", src.Name())
 		}
-		
+
 		mediaFiles, err := src.MediaFiles()
 		if err != nil {
 			if p.Logger != nil {
@@ -147,7 +147,7 @@ func (p *Processor) processFile(f MediaFile) (string, error) {
 	if _, err := io.Copy(h, rc); err != nil {
 		return "", err
 	}
-	
+
 	// Evaluate hash
 	hashStr := hex.EncodeToString(h.Sum(nil))
 
@@ -201,7 +201,7 @@ func (p *Processor) processFile(f MediaFile) (string, error) {
 		if _, err := io.Copy(out, rc2); err != nil {
 			return "", err
 		}
-		
+
 		// Graceful close of disk file
 		if err := out.Close(); err != nil {
 			return "", err
