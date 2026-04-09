@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestInitDB(t *testing.T) {
@@ -52,10 +53,18 @@ func TestDB_ExistsAndInsert(t *testing.T) {
 	}
 
 	// Second check, should exist
-	exists, err = db.Exists(hash)
-	if err != nil {
-		t.Fatalf("Exists check failed: %v", err)
+	// Loop a few times since insert is async
+	for i := 0; i < 50; i++ {
+		exists, err = db.Exists(hash)
+		if err != nil {
+			t.Fatalf("Exists check failed: %v", err)
+		}
+		if exists {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
+	
 	if !exists {
 		t.Errorf("Expected hash to exist after insert")
 	}

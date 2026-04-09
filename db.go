@@ -4,14 +4,23 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"sync"
 
 	_ "github.com/glebarez/go-sqlite"
 )
 
 type HashDB struct {
-	db         *sql.DB
-	existsStmt *sql.Stmt
-	insertStmt *sql.Stmt
+	db          *sql.DB
+	existsStmt  *sql.Stmt
+	insertStmt  *sql.Stmt
+	insertCh    chan insertRecord
+	closeDoneCh chan struct{}
+	memCache    sync.Map
+}
+
+type insertRecord struct {
+	hash     string
+	filename string
 }
 
 func InitDB(outputDir string) (*HashDB, int, error) {
@@ -61,14 +70,24 @@ func InitDB(outputDir string) (*HashDB, int, error) {
 		return nil, 0, err
 	}
 
-	return &HashDB{
-		db:         db,
-		existsStmt: existsStmt,
-		insertStmt: insertStmt,
-	}, count, nil
+	h := &HashDB{
+		db:          db,
+		existsStmt:  existsStmt,
+		insertStmt:  insertStmt,
+		insertCh:    make(chan insertRecord, 1000), // Buffer adds breathing room
+		closeDoneCh: make(chan struct{}),
+	}
+	
+	go h.writer()
+
+	return h, count, nil
 }
 
 func (h *HashDB) Exists(hash string) (bool, error) {
+	if _, ok := h.memCache.Load(hash); ok {
+		return true, nil
+	}
+
 	var dummy string
 	err := h.existsStmt.QueryRow(hash).Scan(&dummy)
 	if err == sql.ErrNoRows {
@@ -77,15 +96,56 @@ func (h *HashDB) Exists(hash string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	h.memCache.Store(hash, true)
 	return true, nil
 }
 
 func (h *HashDB) Insert(hash, filename string) error {
-	_, err := h.insertStmt.Exec(hash, filename)
-	return err
+	h.memCache.Store(hash, true)
+	h.insertCh <- insertRecord{hash: hash, filename: filename}
+	return nil
+}
+
+func (h *HashDB) writer() {
+	for record := range h.insertCh {
+		tx, err := h.db.Begin()
+		if err != nil {
+			// Fallback to non-transactional insert if tx fails
+			h.insertStmt.Exec(record.hash, record.filename)
+			continue
+		}
+
+		stmt := tx.Stmt(h.insertStmt)
+		stmt.Exec(record.hash, record.filename)
+
+		batchSize := 1
+		done := false
+		// Opportunistically grab up to 500 queued inserts
+		for !done && batchSize < 500 {
+			select {
+			case nextRecord, ok := <-h.insertCh:
+				if !ok {
+					done = true
+				} else {
+					stmt.Exec(nextRecord.hash, nextRecord.filename)
+					batchSize++
+				}
+			default:
+				done = true
+			}
+		}
+
+		tx.Commit()
+	}
+	close(h.closeDoneCh)
 }
 
 func (h *HashDB) Close() error {
+	if h.insertCh != nil {
+		close(h.insertCh)
+		<-h.closeDoneCh
+	}
+	
 	if h.existsStmt != nil {
 		h.existsStmt.Close()
 	}
