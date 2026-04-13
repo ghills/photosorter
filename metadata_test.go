@@ -3,6 +3,8 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/binary"
+	"io"
 	"testing"
 	"time"
 )
@@ -170,5 +172,83 @@ func TestExtractAlbumName(t *testing.T) {
 		if result != tt.expected {
 			t.Errorf("ExtractAlbumName(%q) = %q; want %q", tt.path, result, tt.expected)
 		}
+	}
+}
+
+func TestIsMP4Video(t *testing.T) {
+	tests := []struct {
+		filename string
+		want     bool
+	}{
+		{"video.mp4", true},
+		{"video.MP4", true},
+		{"video.mov", true},
+		{"video.MOV", true},
+		{"image.jpg", false},
+		{"video.avi", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.filename, func(t *testing.T) {
+			if got := IsMP4Video(tc.filename); got != tc.want {
+				t.Errorf("IsMP4Video(%q) = %v, want %v", tc.filename, got, tc.want)
+			}
+		})
+	}
+}
+
+type mockMedia struct {
+	content []byte
+}
+
+func (m *mockMedia) Name() string { return "test.mp4" }
+func (m *mockMedia) Open() (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(m.content)), nil
+}
+func (m *mockMedia) OpenSidecar(names []string) (io.ReadCloser, bool) {
+	return nil, false
+}
+
+func TestGetMediaDuration(t *testing.T) {
+	// Build a mock mp4 file
+	// mvhd box (v0): size 28
+	// 4 bytes size, 4 bytes "mvhd"
+	// 1 byte version (0), 3 bytes flags (0)
+	// 4 bytes creation_time, 4 bytes modification_time
+	// 4 bytes timescale, 4 bytes duration
+
+	mvhdBody := make([]byte, 20)
+	mvhdBody[0] = 0                                   // version 0
+	binary.BigEndian.PutUint32(mvhdBody[12:16], 1000) // timescale 1000
+	binary.BigEndian.PutUint32(mvhdBody[16:20], 2500) // duration 2500 -> 2.5s
+
+	mvhdBox := make([]byte, 28)
+	binary.BigEndian.PutUint32(mvhdBox[0:4], 28)
+	copy(mvhdBox[4:8], "mvhd")
+	copy(mvhdBox[8:], mvhdBody)
+
+	moovBox := make([]byte, 8+len(mvhdBox))
+	binary.BigEndian.PutUint32(moovBox[0:4], uint32(len(moovBox)))
+	copy(moovBox[4:8], "moov")
+	copy(moovBox[8:], mvhdBox)
+
+	// Prepend a dummy ftyp box to ensure we skip correctly
+	ftypBox := make([]byte, 16)
+	binary.BigEndian.PutUint32(ftypBox[0:4], 16)
+	copy(ftypBox[4:8], "ftyp")
+	copy(ftypBox[8:], "isom\x00\x00\x02\x00")
+
+	fullContent := append(ftypBox, moovBox...)
+
+	media := &mockMedia{content: fullContent}
+
+	duration, err := GetMediaDuration(media)
+	if err != nil {
+		t.Fatalf("GetMediaDuration failed: %v", err)
+	}
+
+	expected := 2500 * time.Millisecond
+	if duration != expected {
+		t.Errorf("Expected duration %v, got %v", expected, duration)
 	}
 }

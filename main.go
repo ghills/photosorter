@@ -27,6 +27,7 @@ func main() {
 	nosyncFlag := flag.Bool("nosync", false, "Prevent automatic library sync from running")
 	workersFlag := flag.Int("workers", 8, "Number of concurrent workers")
 	dryRunFlag := flag.Bool("dry-run", false, "Simulate extraction without writing to disk")
+	skipShortVideosFlag := flag.Int("skip-short-videos", 3, "Skip importing videos shorter than or equal to this many seconds (e.g. motion photos)")
 	flag.Parse()
 
 	if *outFlag == "" {
@@ -119,7 +120,7 @@ func main() {
 	}
 
 	if len(sources) > 0 {
-		processor := NewProcessor(sources, *outFlag, db, *workersFlag, *dryRunFlag, logger)
+		processor := NewProcessor(sources, *outFlag, db, *workersFlag, *skipShortVideosFlag, *dryRunFlag, logger)
 		err = processor.Run()
 		if err != nil {
 			fmt.Printf("Pipeline error: %v\n", err)

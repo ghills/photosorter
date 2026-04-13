@@ -53,6 +53,7 @@ Alternatively, to process a local directory of media files instead of a zip file
 - `-workers <number>`: Number of concurrent workers for processing (default 8).
 - `-dry-run`: Run a simulation of extraction and database insertion, without actually modifying the disk.
 - `-nosync`: Prevent automatic library sync from running.
+- `-skip-short-videos <seconds>`: Skip importing `mp4` and `mov` videos shorter than or equal to this duration (default 3). This is useful for ignoring small 1-2s "motion photos" without importing them as standalone videos.
 
 ### Syncing an Existing Library
 

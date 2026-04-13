@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"path/filepath"
 	"regexp"
@@ -156,4 +158,94 @@ func ExtractAlbumName(filePath string) string {
 	}
 
 	return ""
+}
+
+// IsMP4Video checks if the file is an mp4 or mov wrapper which we can parse for duration.
+func IsMP4Video(filename string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".mp4", ".mov":
+		return true
+	}
+	return false
+}
+
+// GetMediaDuration reads the moov -> mvhd atom from an MP4/MOV file to determine its exact duration.
+func GetMediaDuration(f MediaFile) (time.Duration, error) {
+	rc, err := f.Open()
+	if err != nil {
+		return 0, err
+	}
+	defer rc.Close()
+
+	var header [8]byte
+	for {
+		_, err := io.ReadFull(rc, header[:])
+		if err != nil {
+			return 0, err
+		}
+		
+		size := binary.BigEndian.Uint32(header[0:4])
+		boxType := string(header[4:8])
+		
+		var realSize int64
+		var headerLen int64 = 8
+		if size == 1 {
+			var extSize [8]byte
+			if _, err := io.ReadFull(rc, extSize[:]); err != nil {
+				return 0, err
+			}
+			realSize = int64(binary.BigEndian.Uint64(extSize[:]))
+			headerLen = 16
+		} else if size == 0 {
+			// Extends to end of file
+			return 0, fmt.Errorf("reached end of file box, moov not found")
+		} else {
+			realSize = int64(size)
+		}
+		
+		if boxType == "moov" {
+			continue // Check children
+		}
+		
+		if boxType == "mvhd" {
+			bodySize := realSize - headerLen
+			body := make([]byte, bodySize)
+			if _, err := io.ReadFull(rc, body); err != nil {
+				return 0, err
+			}
+			
+			version := body[0]
+			if version == 0 {
+				if len(body) < 20 {
+					return 0, fmt.Errorf("mvhd box too small")
+				}
+				timeScale := binary.BigEndian.Uint32(body[12:16])
+				duration := binary.BigEndian.Uint32(body[16:20])
+				if timeScale == 0 {
+					return 0, fmt.Errorf("invalid timescale 0")
+				}
+				return time.Duration(duration) * time.Second / time.Duration(timeScale), nil
+			} else if version == 1 {
+				if len(body) < 28 {
+					return 0, fmt.Errorf("mvhd box too small")
+				}
+				timeScale := binary.BigEndian.Uint32(body[20:24])
+				duration := binary.BigEndian.Uint64(body[24:32])
+				if timeScale == 0 {
+					return 0, fmt.Errorf("invalid timescale 0")
+				}
+				return time.Duration(duration) * time.Second / time.Duration(timeScale), nil
+			}
+			return 0, fmt.Errorf("unsupported mvhd version %d", version)
+		}
+		
+		skipBytes := realSize - headerLen
+		if skipBytes > 0 {
+			_, err = io.CopyN(io.Discard, rc, skipBytes)
+			if err != nil {
+				return 0, err
+			}
+		}
+	}
 }

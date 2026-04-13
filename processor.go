@@ -16,23 +16,25 @@ import (
 )
 
 type Processor struct {
-	Sources    []InputSource
-	OutputDir  string
-	DB         *HashDB
-	Workers    int
-	DryRun     bool
-	Logger     *log.Logger
-	TotalItems int
+	Sources         []InputSource
+	OutputDir       string
+	DB              *HashDB
+	Workers         int
+	SkipShortVideos int
+	DryRun          bool
+	Logger          *log.Logger
+	TotalItems      int
 }
 
-func NewProcessor(sources []InputSource, outputDir string, db *HashDB, workers int, dryRun bool, logger *log.Logger) *Processor {
+func NewProcessor(sources []InputSource, outputDir string, db *HashDB, workers int, skipShortVideos int, dryRun bool, logger *log.Logger) *Processor {
 	return &Processor{
-		Sources:   sources,
-		OutputDir: outputDir,
-		DB:        db,
-		Workers:   workers,
-		DryRun:    dryRun,
-		Logger:    logger,
+		Sources:         sources,
+		OutputDir:       outputDir,
+		DB:              db,
+		Workers:         workers,
+		SkipShortVideos: skipShortVideos,
+		DryRun:          dryRun,
+		Logger:          logger,
 	}
 }
 
@@ -43,6 +45,7 @@ func (p *Processor) Run() error {
 	var countJsonCreation int32
 	var countFilename int32
 	var countUnknown int32
+	var shortVideosSkipped int32
 	var errorsCount int32
 
 	for _, src := range p.Sources {
@@ -90,6 +93,11 @@ func (p *Processor) Run() error {
 							if p.Logger != nil {
 								p.Logger.Printf("Skipped duplicate: %s", mF.Name())
 							}
+						} else if origin == "skipped_short_video" {
+							atomic.AddInt32(&shortVideosSkipped, 1)
+							if p.Logger != nil {
+								p.Logger.Printf("Skipped short video: %s", mF.Name())
+							}
 						} else {
 							if p.Logger != nil {
 								p.Logger.Printf("Successfully organized: %s (via %s)", mF.Name(), origin)
@@ -129,6 +137,7 @@ func (p *Processor) Run() error {
 	fmt.Printf("  └ via Filename Regex   : %d\n", countFilename)
 	fmt.Printf("  └ Sent to Unknown_Date : %d\n", countUnknown)
 	fmt.Printf("Duplicates Skipped       : %d\n", duplicatesSkipped)
+	fmt.Printf("Short Videos Skipped     : %d\n", shortVideosSkipped)
 	fmt.Printf("Errors                   : %d\n", errorsCount)
 
 	return nil
@@ -159,6 +168,18 @@ func (p *Processor) processFile(f MediaFile) (string, error) {
 	// Skip extraction entirely if duplicate (Zero Disk Write IO!)
 	if exists {
 		return "skipped", nil
+	}
+
+	if p.SkipShortVideos > 0 && IsMP4Video(f.Name()) {
+		if dur, err := GetMediaDuration(f); err == nil && dur > 0 {
+			if dur.Seconds() <= float64(p.SkipShortVideos) {
+				if !p.DryRun {
+					// Finalize record so we don't scan it again if re-run
+					_ = p.DB.Insert(hashStr, filepath.Base(f.Name()))
+				}
+				return "skipped_short_video", nil
+			}
+		}
 	}
 
 	// 1. Determine destination path
