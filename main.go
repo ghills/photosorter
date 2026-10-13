@@ -39,6 +39,7 @@ func run() int {
 	syncFlag := flag.Bool("sync", false, "Sync database with existing files in the output folder")
 	nosyncFlag := flag.Bool("nosync", false, "Prevent automatic library sync from running")
 	workersFlag := flag.Int("workers", 8, "Number of concurrent workers")
+	bufferMBFlag := flag.Int("max-buffer-mb", 16, "Files up to this size (MB) are read into memory once instead of several times; 0 disables. Peak memory is about workers x this value")
 	dryRunFlag := flag.Bool("dry-run", false, "Simulate extraction without writing to disk")
 	tzFlag := flag.String("tz", "", "IANA timezone (e.g. America/New_York) used to turn timestamps into dates; defaults to this machine's timezone")
 	skipShortVideosFlag := flag.Int("skip-short-videos", 3, "Skip importing videos shorter than or equal to this many seconds (e.g. motion photos)")
@@ -156,7 +157,7 @@ func run() int {
 	}
 
 	if needsSync {
-		err = SyncFolderWithDB(ctx, *outFlag, db)
+		err = SyncFolderWithDB(ctx, *outFlag, db, *workersFlag)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				fmt.Println("\nInterrupted during sync.")
@@ -183,6 +184,7 @@ func run() int {
 
 	if len(sources) > 0 {
 		processor := NewProcessor(sources, *outFlag, db, *workersFlag, *skipShortVideosFlag, *dryRunFlag, logger)
+		processor.BufferLimit = int64(*bufferMBFlag) << 20
 		err = processor.Run(ctx)
 		if errors.Is(err, context.Canceled) {
 			fmt.Println("Interrupted. Finished files were recorded; re-run to continue.")

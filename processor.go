@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -26,7 +27,19 @@ type Processor struct {
 	DryRun          bool
 	Logger          *log.Logger
 	TotalItems      int
+
+	// BufferLimit is the largest file (in bytes) read fully into memory so hashing, date
+	// detection and the copy share a single read. Larger files are streamed, one read each
+	// per step. Zero disables buffering. Peak memory is roughly Workers × BufferLimit.
+	BufferLimit int64
+
+	// bufPool recycles read buffers so buffering a file that turns out to be a duplicate
+	// doesn't cost an allocation.
+	bufPool sync.Pool
 }
+
+// DefaultBufferLimit covers typical photos and short clips.
+const DefaultBufferLimit = 16 << 20
 
 func NewProcessor(sources []InputSource, outputDir string, db *HashDB, workers int, skipShortVideos int, dryRun bool, logger *log.Logger) *Processor {
 	return &Processor{
@@ -37,6 +50,7 @@ func NewProcessor(sources []InputSource, outputDir string, db *HashDB, workers i
 		SkipShortVideos: skipShortVideos,
 		DryRun:          dryRun,
 		Logger:          logger,
+		BufferLimit:     DefaultBufferLimit,
 	}
 }
 
@@ -203,19 +217,13 @@ func (p *Processor) safeProcessFile(ctx context.Context, f MediaFile) (origin st
 
 // processFile handles extracting a single file using a two-pass method to minimize disk writes.
 func (p *Processor) processFile(ctx context.Context, f MediaFile) (origin string, err error) {
-	// PASS 1: Read the file strictly to calculate its hash
-	rc, err := f.Open()
+	// PASS 1: Read the file to calculate its hash. Small files are kept in memory so the
+	// remaining steps (date detection, copy) don't have to read the source again.
+	hashStr, f, release, err := p.hashAndBuffer(ctx, f)
 	if err != nil {
 		return "", err
 	}
-	defer rc.Close()
-
-	h := xxhash.New()
-	if _, err := io.Copy(h, &ctxReader{ctx: ctx, r: rc}); err != nil {
-		return "", err
-	}
-
-	hashStr := hex.EncodeToString(h.Sum(nil))
+	defer release()
 
 	// Atomically claim the hash so concurrent workers can't both import identical content.
 	// Skip extraction entirely if duplicate (Zero Disk Write IO!)
@@ -361,3 +369,80 @@ func (c *ctxReader) Read(b []byte) (int, error) {
 	}
 	return c.r.Read(b)
 }
+
+// hashAndBuffer hashes f. When f is small enough it is read into memory and the returned
+// MediaFile serves its content from there, so later steps cost no further source reads.
+// The caller must call release when done with the returned MediaFile.
+func (p *Processor) hashAndBuffer(ctx context.Context, f MediaFile) (hash string, mf MediaFile, release func(), err error) {
+	if sz, ok := f.(interface{ Size() int64 }); ok && p.BufferLimit > 0 {
+		if size := sz.Size(); size >= 0 && size <= p.BufferLimit {
+			hash, mf, release, ok, err := p.bufferAndHash(ctx, f, size)
+			if err != nil || ok {
+				return hash, mf, release, err
+			}
+			// Larger than advertised: fall through and stream it instead of holding it in memory.
+		}
+	}
+	hash, err = streamHash(ctx, f)
+	return hash, f, func() {}, err
+}
+
+// bufferAndHash reads f into a pooled buffer and hashes it. ok is false if the file turned out
+// to exceed BufferLimit (the size hint came from untrusted metadata), in which case nothing is kept.
+func (p *Processor) bufferAndHash(ctx context.Context, f MediaFile, size int64) (hash string, mf MediaFile, release func(), ok bool, err error) {
+	rc, err := f.Open()
+	if err != nil {
+		return "", nil, nil, false, err
+	}
+	defer rc.Close()
+
+	buf, _ := p.bufPool.Get().(*bytes.Buffer)
+	if buf == nil {
+		buf = new(bytes.Buffer)
+	}
+	buf.Reset()
+	buf.Grow(int(size) + 1)
+	release = func() { p.bufPool.Put(buf) }
+
+	r := io.LimitReader(&ctxReader{ctx: ctx, r: rc}, p.BufferLimit+1)
+	if _, err := buf.ReadFrom(r); err != nil {
+		release()
+		return "", nil, nil, false, err
+	}
+	if int64(buf.Len()) > p.BufferLimit {
+		release()
+		return "", nil, nil, false, nil
+	}
+
+	h := xxhash.New()
+	h.Write(buf.Bytes())
+	return hex.EncodeToString(h.Sum(nil)), &bufferedFile{MediaFile: f, data: buf.Bytes()}, release, true, nil
+}
+
+func streamHash(ctx context.Context, f MediaFile) (string, error) {
+	rc, err := f.Open()
+	if err != nil {
+		return "", err
+	}
+	defer rc.Close()
+	h := xxhash.New()
+	if _, err := io.Copy(h, &ctxReader{ctx: ctx, r: rc}); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// bufferedFile serves an already-read file's content from memory.
+type bufferedFile struct {
+	MediaFile
+	data []byte
+}
+
+func (b *bufferedFile) Open() (io.ReadCloser, error) {
+	return memReader{bytes.NewReader(b.data)}, nil
+}
+
+// memReader is a ReadCloser that keeps bytes.Reader's Seek, which lets callers skip data cheaply.
+type memReader struct{ *bytes.Reader }
+
+func (memReader) Close() error { return nil }

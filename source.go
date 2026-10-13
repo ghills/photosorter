@@ -82,6 +82,9 @@ func (z *ZipMediaFile) Name() string {
 	return z.f.Name
 }
 
+// Size is the uncompressed size recorded in the zip directory (untrusted: callers must not rely on it).
+func (z *ZipMediaFile) Size() int64 { return int64(z.f.UncompressedSize64) }
+
 func (z *ZipMediaFile) Open() (io.ReadCloser, error) {
 	return z.f.Open()
 }
@@ -148,6 +151,14 @@ type LocalMediaFile struct {
 
 func (l *LocalMediaFile) Name() string {
 	return l.path
+}
+
+// Size returns the file size, or -1 if it can't be determined.
+func (l *LocalMediaFile) Size() int64 {
+	if info, err := os.Stat(l.path); err == nil {
+		return info.Size()
+	}
+	return -1
 }
 
 func (l *LocalMediaFile) Open() (io.ReadCloser, error) {

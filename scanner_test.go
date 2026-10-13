@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -79,7 +80,7 @@ func TestSyncFolderWithDB_RecordsHashes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := SyncFolderWithDB(context.Background(), lib, db); err != nil {
+	if err := SyncFolderWithDB(context.Background(), lib, db, 4); err != nil {
 		t.Fatalf("SyncFolderWithDB: %v", err)
 	}
 	if err := db.Close(); err != nil {
@@ -117,7 +118,7 @@ func TestSyncFolderWithDB_PreventsReimport(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := SyncFolderWithDB(context.Background(), lib, db); err != nil {
+	if err := SyncFolderWithDB(context.Background(), lib, db, 4); err != nil {
 		t.Fatal(err)
 	}
 
@@ -140,7 +141,7 @@ func TestSyncFolderWithDB_EmptyLibrary(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := SyncFolderWithDB(context.Background(), t.TempDir(), db); err != nil {
+	if err := SyncFolderWithDB(context.Background(), t.TempDir(), db, 4); err != nil {
 		t.Errorf("empty library: %v", err)
 	}
 }
@@ -156,7 +157,7 @@ func TestSyncFolderWithDB_StopsOnCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err = SyncFolderWithDB(ctx, lib, db)
+	err = SyncFolderWithDB(ctx, lib, db, 4)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
@@ -175,7 +176,7 @@ func TestSyncFolderWithDB_StopsOnDBFailure(t *testing.T) {
 	defer db.Close()
 	db.setErr(errors.New("disk full"))
 
-	if err := SyncFolderWithDB(context.Background(), lib, db); err == nil {
+	if err := SyncFolderWithDB(context.Background(), lib, db, 4); err == nil {
 		t.Error("expected the database failure to be returned")
 	}
 }
@@ -197,5 +198,34 @@ func TestAppendToDB(t *testing.T) {
 	}
 	if err := appendToDB(filepath.Join(dir, "missing.jpg"), db); err == nil {
 		t.Error("expected error for a missing file")
+	}
+}
+
+func TestSyncFolderWithDB_ManyFilesConcurrently(t *testing.T) {
+	lib := t.TempDir()
+	files := map[string]string{}
+	for i := 0; i < 300; i++ {
+		files[fmt.Sprintf("d%d/img_%d.jpg", i%7, i)] = fmt.Sprintf("content %d", i)
+	}
+	writeFiles(t, lib, files)
+
+	dbDir := t.TempDir()
+	db, _, err := InitDB(dbDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SyncFolderWithDB(context.Background(), lib, db, 8); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db2, count, err := InitDB(dbDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+	if count != 300 {
+		t.Errorf("persisted %d hashes, want 300", count)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/schollz/progressbar/v3"
@@ -27,8 +28,9 @@ func CountMediaFiles(dir string) (int, error) {
 	return count, err
 }
 
-// SyncFolderWithDB hashes all media files in the target directory and inserts them into the DB.
-func SyncFolderWithDB(ctx context.Context, dir string, db *HashDB) error {
+// SyncFolderWithDB hashes all media files in the target directory and inserts them into the DB,
+// using up to workers concurrent hashers.
+func SyncFolderWithDB(ctx context.Context, dir string, db *HashDB, workers int) error {
 	var mediaFiles []string
 	var skipped []string
 
@@ -53,24 +55,44 @@ func SyncFolderWithDB(ctx context.Context, dir string, db *HashDB) error {
 		return nil
 	}
 
+	if workers < 1 {
+		workers = 1
+	}
 	bar := progressbar.Default(int64(len(mediaFiles)), "Syncing to database")
 
+	taskCh := make(chan string, len(mediaFiles))
 	for _, path := range mediaFiles {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := db.Err(); err != nil {
-			return err
-		}
-		err := appendToDB(path, db)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "\nError hashing %s: %v\n", path, err)
-		}
-		bar.Add(1)
+		taskCh <- path
+	}
+	close(taskCh)
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for path := range taskCh {
+				if ctx.Err() != nil || db.Err() != nil {
+					return
+				}
+				if err := appendToDB(path, db); err != nil {
+					fmt.Fprintf(os.Stderr, "\nError hashing %s: %v\n", path, err)
+				}
+				bar.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := db.Err(); err != nil {
+		return err
 	}
 
 	fmt.Println("\nSync complete.")
-	return db.Err()
+	return nil
 }
 
 func appendToDB(filePath string, db *HashDB) error {

@@ -14,7 +14,7 @@ Instead of dealing with directories containing JSON sidecars, duplicate images, 
   2. **JSON Sidecars**: Parses Google Photos metadata sidecar files (`.json`) for `photoTakenTime` or `creationTime` timestamps if EXIF is not found. Matching understands Takeout's naming quirks: `.supplemental-metadata.json`, names truncated to fit Takeout's length limit, duplicate counters (`IMG_1(1).jpg` → `IMG_1.jpg(1).json`), `-edited` copies, and sidecars stored in a different zip part than their media.
   3. **Filename Parsing**: Extracts dates via regex from common camera filename patterns (e.g., `IMG_20230514_...`).
 - **Deduplication**: Uses a persistent SQLite database (`.photosorter_cache.db`) and `xxhash` to detect and skip duplicates to minimize disk writes. The database is optimized with WAL mode and prepared statements for better performance.
-- **Smart Library Synchronization**: Can gracefully reconcile with an existing output folder that contains organized media by hashing existing files before processing a new Takeout zip.
+- **Smart Library Synchronization**: Can gracefully reconcile with an existing output folder that contains organized media by hashing existing files before processing a new Takeout zip, using the same worker pool as the import.
 - **Chronological Output**: Routes files into `YYYY-MM-DD` folders (e.g., `2023-05-14/`). Files lacking detectable dates are placed in an `Unknown_Date/` folder.
 - **Album Preservation**: Detects Google Photos Album organization within the Takeout zip and preserves it by routing those files to an `Albums/<Album Name>/` directory instead of generic date folders.
 - **Concurrent Processing**: Configurable goroutine worker pool (`-workers`) for rapid multi-threaded file hashing and extraction.
@@ -54,6 +54,7 @@ Alternatively, to process a local directory of media files instead of a zip file
 - `-dry-run`: Run a simulation of extraction without writing any files or database records. Duplicates within the run are still detected.
 - `-tz <name>`: IANA timezone (e.g. `America/New_York`) used to turn capture timestamps into `YYYY-MM-DD` folders. Defaults to this machine's timezone. Set it when running somewhere other than where the photos were taken (a server or container in UTC, for example), so photos taken in the evening don't land in the next day's folder.
 - `-nosync`: Prevent automatic library sync from running.
+- `-max-buffer-mb <MB>`: Files up to this size (default 16) are read into memory once and reused for hashing, date detection and the copy, instead of being re-read from the source (or re-decompressed from the zip) at each step. Larger files are streamed. Peak memory is roughly `-workers` × this value; set it to `0` to disable buffering on very constrained machines.
 - `-skip-short-videos <seconds>`: Skip importing `mp4` and `mov` videos shorter than or equal to this duration (default 3). This is useful for ignoring small 1-2s "motion photos" without importing them as standalone videos.
 
 ### Exit Codes
@@ -87,8 +88,8 @@ Organize an exported Takeout archive into a `MyPhotos` directory:
 ## How It Works
 
 PhotoSorter processes the archive in two parts to reduce disk IO operations:
-- **Pass 1 (Hash Verification)**: The tool streams the target file from the zip archive into memory to compute its `xxhash`. It verifies this hash against the SQLite database. If the file is a duplicate, no disk extraction occurs.
-- **Pass 2 (Extraction)**: If the file is unique, the ZIP stream is read again, and the file is written to its proper chronological destination path.
+- **Pass 1 (Hash Verification)**: The tool reads the target file from the source to compute its `xxhash`. Files up to `-max-buffer-mb` are held in memory while this happens. It verifies the hash against the SQLite database. If the file is a duplicate, no disk extraction occurs.
+- **Pass 2 (Extraction)**: If the file is unique, it is written to its proper chronological destination path, from memory for buffered files, or by reading the source stream again for larger ones. Date detection (EXIF) uses the same in-memory copy.
 
 ## Development and Testing
 
