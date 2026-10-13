@@ -2,6 +2,7 @@ package importer
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -49,14 +50,10 @@ func (im *Importer) importFile(ctx context.Context, f source.File) (result, erro
 		}
 	}()
 
-	// 3. Skip motion-photo clips and other very short videos. They are recorded, so a
-	// later run doesn't have to inspect them again.
+	// 3. Skip motion-photo clips and other very short videos. They are not recorded, so
+	// a later run with a lower threshold can still import them.
 	if im.isShortVideo(f) {
-		keepClaim = true
-		if im.opts.DryRun {
-			return result{outcome: shortVideo}, nil
-		}
-		return result{outcome: shortVideo}, im.db.Record(hash, filepath.Base(f.Name()))
+		return result{outcome: shortVideo}, nil
 	}
 
 	// 4 & 5. Date the file and choose its folder.
@@ -65,7 +62,8 @@ func (im *Importer) importFile(ctx context.Context, f source.File) (result, erro
 	rel := filepath.Join(dir, filepath.Base(f.Name()))
 
 	if im.opts.DryRun {
-		keepClaim = true // so identical files later in the run count as duplicates
+		keepClaim = true
+		im.db.Keep(hash) // so identical files later in the run count as duplicates
 		return result{outcome: imported, date: dateSrc, dest: rel}, nil
 	}
 
@@ -73,7 +71,7 @@ func (im *Importer) importFile(ctx context.Context, f source.File) (result, erro
 	if err := os.MkdirAll(filepath.Join(im.opts.Library, dir), 0755); err != nil {
 		return result{}, err
 	}
-	written, err := writeFile(ctx, f, filepath.Join(im.opts.Library, rel))
+	written, err := writeFile(ctx, f, filepath.Join(im.opts.Library, rel), im.tempDir())
 	if err != nil {
 		return result{}, err
 	}
@@ -84,6 +82,11 @@ func (im *Importer) importFile(ctx context.Context, f source.File) (result, erro
 	rel, _ = filepath.Rel(im.opts.Library, written)
 	return result{outcome: imported, date: dateSrc, dest: rel}, nil
 }
+
+// maxDurationScan is how far into a non-seekable stream (a zip entry too large to
+// buffer) the duration check reads before giving up. Without a seek, a video whose
+// moov box sits after its media data would otherwise be decompressed in full.
+const maxDurationScan = 64 << 20
 
 // isShortVideo reports whether f is a video no longer than the configured threshold.
 // Videos whose duration can't be read are never considered short.
@@ -96,6 +99,10 @@ func (im *Importer) isShortVideo(f source.File) bool {
 		return false
 	}
 	defer rc.Close()
-	d, err := media.MP4Duration(rc)
+	var r io.Reader = rc
+	if _, ok := rc.(io.Seeker); !ok {
+		r = io.LimitReader(rc, maxDurationScan)
+	}
+	d, err := media.MP4Duration(r)
 	return err == nil && d > 0 && d <= im.opts.SkipVideosUpTo
 }

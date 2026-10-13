@@ -178,8 +178,46 @@ func TestRun_DryRunWritesNoMedia(t *testing.T) {
 	if code != ExitOK || !strings.Contains(out, "DRY RUN") {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
-	if got := mediaIn(t, lib); len(got) != 0 {
-		t.Errorf("dry run wrote %v", got)
+	if _, err := os.Stat(lib); !os.IsNotExist(err) {
+		t.Errorf("dry run created the library folder (stat err %v)", err)
+	}
+}
+
+func TestRun_DryRunSyncRecordsNothing(t *testing.T) {
+	lib := t.TempDir()
+	writeFile(t, filepath.Join(lib, "2020-01-01", "a.jpg"), "a")
+	if code, out := runCLI(t, "-out", lib, "-no-sync", "-sync"); code != ExitOK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	writeFile(t, filepath.Join(lib, "2020-01-01", "b.jpg"), "b")
+	if code, out := runCLI(t, "-out", lib, "-dry-run", "-sync"); code != ExitOK || !strings.Contains(out, "2 files hashed") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if _, out := runCLI(t, "-out", lib, "-sync"); !strings.Contains(out, "1 files tracked") {
+		t.Errorf("dry-run sync changed the database:\n%s", out)
+	}
+}
+
+// Duplicate content inside the library shares one hash; that alone must not trigger
+// the "files added by other means" warning.
+func TestRun_NoSyncWarningForDuplicateContent(t *testing.T) {
+	dir := t.TempDir()
+	lib := filepath.Join(dir, "Library")
+	writeFile(t, filepath.Join(lib, "a", "x.jpg"), "same")
+	writeFile(t, filepath.Join(lib, "b", "x.jpg"), "same")
+	if code, out := runCLI(t, "-out", lib, "-sync"); code != ExitOK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	code, out := runCLI(t, "-out", lib, takeoutFixture(t, dir))
+	if code != ExitOK || strings.Contains(out, "warning: the library has") {
+		t.Errorf("import: exit %d\n%s", code, out)
+	}
+	if _, out := runCLI(t, "-out", lib, takeoutFixture(t, dir)); strings.Contains(out, "warning: the library has") {
+		t.Errorf("false warning after import:\n%s", out)
+	}
+	writeFile(t, filepath.Join(lib, "c", "new.jpg"), "added by hand")
+	if _, out := runCLI(t, "-out", lib, takeoutFixture(t, dir)); !strings.Contains(out, "warning: the library has") {
+		t.Errorf("no warning for a file added by other means:\n%s", out)
 	}
 }
 

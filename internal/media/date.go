@@ -45,8 +45,11 @@ func DateFromFilename(name string, loc *time.Location) (time.Time, bool) {
 	year, _ := strconv.Atoi(m[1])
 	month, _ := strconv.Atoi(m[2])
 	day, _ := strconv.Atoi(m[3])
-	if month < 1 || month > 12 || day < 1 || day > 31 {
+	// time.Date normalizes out-of-range values (Feb 30 becomes Mar 2), so a date that
+	// doesn't survive the round trip isn't a real one.
+	t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc)
+	if t.Year() != year || t.Month() != time.Month(month) || t.Day() != day {
 		return time.Time{}, false
 	}
-	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, loc), true
+	return t, true
 }

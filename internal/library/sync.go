@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -31,22 +32,39 @@ func HashBytes(b []byte) string {
 	return hex.EncodeToString(binary.BigEndian.AppendUint64(nil, xxhash.Sum64(b)))
 }
 
-// CountMedia counts the media files under dir. Unreadable paths are skipped.
-func CountMedia(dir string, filter media.Filter) int {
-	n := 0
-	filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && filter.MatchIn(dir, p) {
-			n++
+// Media lists the media files found under a library folder by [Scan].
+type Media struct {
+	// Paths are the media files.
+	Paths []string
+	// Unreadable lists paths the walk could not read ("path: error").
+	Unreadable []string
+}
+
+// Scan lists the media files under dir. Unreadable paths are reported rather than
+// stopping the walk; a missing dir is reported the same way. It returns early with
+// ctx's error if ctx is cancelled.
+func Scan(ctx context.Context, dir string, filter media.Filter) (Media, error) {
+	var m Media
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		switch {
+		case err != nil:
+			if p != dir || !errors.Is(err, fs.ErrNotExist) {
+				m.Unreadable = append(m.Unreadable, fmt.Sprintf("%s: %v", p, err))
+			}
+		case !d.IsDir() && filter.MatchIn(dir, p):
+			m.Paths = append(m.Paths, p)
 		}
 		return nil
 	})
-	return n
+	return m, err
 }
 
 // SyncOptions configures [Sync].
 type SyncOptions struct {
 	Workers  int
-	Filter   media.Filter
 	Progress io.Writer // progress bar destination; nil for none
 }
 
@@ -54,36 +72,21 @@ type SyncOptions struct {
 type SyncResult struct {
 	// Hashed is the number of files hashed and recorded.
 	Hashed int
-	// Unreadable lists paths the folder walk could not read ("path: error").
-	Unreadable []string
 	// Failed lists files that could not be hashed ("path: error").
 	Failed []string
 }
 
-// Sync hashes every media file under dir and records it in db, so content already in
-// the library is recognised as a duplicate. It returns early with ctx's error if ctx is
-// cancelled, or with the database error if writes start failing.
+// Sync hashes the library's media files (as found by [Scan]) and records them in db,
+// so content already in the library is recognised as a duplicate. On success it also
+// stores the number of files as [DB.LibraryFiles]. It returns early with ctx's error
+// if ctx is cancelled, or with the database error if writes start failing.
 //
 // Files that cannot be read are reported in the result rather than stopping the sync:
 // they are simply not protected against re-import.
-func Sync(ctx context.Context, dir string, db *DB, opts SyncOptions) (SyncResult, error) {
+func Sync(ctx context.Context, files Media, db *DB, opts SyncOptions) (SyncResult, error) {
 	var res SyncResult
-	var paths []string
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		switch {
-		case err != nil:
-			res.Unreadable = append(res.Unreadable, fmt.Sprintf("%s: %v", p, err))
-		case !d.IsDir() && opts.Filter.MatchIn(dir, p):
-			paths = append(paths, p)
-		}
-		return nil
-	})
-	if err != nil {
-		return res, err
-	}
-
 	var mu sync.Mutex
-	parallel.ForEach(ctx, paths, parallel.Options{
+	parallel.ForEach(ctx, files.Paths, parallel.Options{
 		Workers:  opts.Workers,
 		Stop:     func() bool { return db.Err() != nil },
 		Progress: opts.Progress,
@@ -102,7 +105,10 @@ func Sync(ctx context.Context, dir string, db *DB, opts SyncOptions) (SyncResult
 	if err := ctx.Err(); err != nil {
 		return res, err
 	}
-	return res, db.Err()
+	if err := db.Err(); err != nil {
+		return res, err
+	}
+	return res, db.SetLibraryFiles(len(files.Paths))
 }
 
 // recordFile hashes the file at path and records it under its base name.

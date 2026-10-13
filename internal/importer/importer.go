@@ -12,10 +12,8 @@ import (
 	"photosorter/internal/library"
 	"photosorter/internal/parallel"
 	"photosorter/internal/source"
+	"photosorter/internal/takeout"
 )
-
-// DefaultBufferLimit covers typical photos and short clips.
-const DefaultBufferLimit = 16 << 20
 
 // Options configures an [Importer]. The zero value of each field is usable except
 // Library, which is required.
@@ -86,18 +84,32 @@ func (e *FilesFailedError) Error() string {
 	return fmt.Sprintf("%d file(s) could not be imported", e.Count)
 }
 
-// Run imports every file of every source and returns a summary.
+// Run imports every file of every source and returns a summary. With
+// Layout.KeepAlbums, album files from every source are imported before the rest:
+// Takeout also places album media in year folders, and the first copy imported
+// decides the folder, so this keeps albums complete whatever the order.
 //
 // It stops early, after in-flight files finish or abort, when ctx is cancelled or the
 // database stops accepting writes; the error then says why. Otherwise it returns a
 // [*FilesFailedError] if any file failed, or nil. The report is valid in every case.
 func (im *Importer) Run(ctx context.Context, sources []source.Source) (Report, error) {
 	t := newTally(im.opts.DryRun)
+	if !im.opts.DryRun {
+		if err := im.cleanTempDir(); err != nil {
+			return t.report(), err
+		}
+	}
 	for _, src := range sources {
+		for _, w := range src.Warnings() {
+			t.add(func(r *Report) { r.Unreadable++ })
+			im.opts.Log.Printf("Skipped unreadable path: %s", w)
+		}
+	}
+	for _, b := range im.batches(sources) {
 		if ctx.Err() != nil || im.db.Err() != nil {
 			break
 		}
-		im.importSource(ctx, src, t)
+		im.importBatch(ctx, b, t)
 	}
 	report := t.report()
 
@@ -113,19 +125,43 @@ func (im *Importer) Run(ctx context.Context, sources []source.Source) (Report, e
 	return report, nil
 }
 
-// importSource runs every file of one source through the worker pool.
-func (im *Importer) importSource(ctx context.Context, src source.Source, t *tally) {
-	im.opts.Log.Printf("Importing from %s", src.Name())
-	for _, w := range src.Warnings() {
-		t.add(func(r *Report) { r.Unreadable++ })
-		im.opts.Log.Printf("Skipped unreadable path: %s", w)
-	}
+// batch is a group of files imported together, with its progress label.
+type batch struct {
+	label string
+	files []source.File
+}
 
-	parallel.ForEach(ctx, src.Files(), parallel.Options{
+// batches orders the work: one batch per source, with album files split off into
+// batches that all run first when Layout.KeepAlbums is set.
+func (im *Importer) batches(sources []source.Source) []batch {
+	var albums, rest []batch
+	for _, src := range sources {
+		var inAlbum, other []source.File
+		for _, f := range src.Files() {
+			if im.opts.Layout.KeepAlbums && takeout.AlbumName(f.Name()) != "" {
+				inAlbum = append(inAlbum, f)
+			} else {
+				other = append(other, f)
+			}
+		}
+		if len(inAlbum) > 0 {
+			albums = append(albums, batch{"Importing albums from " + src.Name(), inAlbum})
+		}
+		if len(other) > 0 {
+			rest = append(rest, batch{"Importing " + src.Name(), other})
+		}
+	}
+	return append(albums, rest...)
+}
+
+// importBatch runs every file of one batch through the worker pool.
+func (im *Importer) importBatch(ctx context.Context, b batch, t *tally) {
+	im.opts.Log.Print(b.label)
+	parallel.ForEach(ctx, b.files, parallel.Options{
 		Workers:  im.opts.Workers,
 		Stop:     func() bool { return im.db.Err() != nil },
 		Progress: im.opts.Progress,
-		Label:    "Importing " + src.Name(),
+		Label:    b.label,
 	}, func(f source.File) {
 		im.handle(ctx, f, t)
 	})

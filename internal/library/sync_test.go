@@ -28,7 +28,25 @@ func writeFiles(t *testing.T, root string, files map[string]string) {
 
 func hashOf(content string) string { return HashBytes([]byte(content)) }
 
-func syncOpts() SyncOptions { return SyncOptions{Workers: 4, Filter: media.DefaultFilter()} }
+func syncOpts() SyncOptions { return SyncOptions{Workers: 4} }
+
+func scan(t *testing.T, dir string) Media {
+	t.Helper()
+	m, err := Scan(context.Background(), dir, media.DefaultFilter())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func countMedia(t *testing.T, dir string, filter media.Filter) int {
+	t.Helper()
+	m, err := Scan(context.Background(), dir, filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(m.Paths)
+}
 
 func TestHash_MatchesHashBytes(t *testing.T) {
 	content := bytes.Repeat([]byte("abc"), 10000)
@@ -41,7 +59,7 @@ func TestHash_MatchesHashBytes(t *testing.T) {
 	}
 }
 
-func TestCountMedia(t *testing.T) {
+func TestScan(t *testing.T) {
 	dir := t.TempDir()
 	writeFiles(t, dir, map[string]string{
 		"a.jpg":                    "a",
@@ -56,20 +74,20 @@ func TestCountMedia(t *testing.T) {
 		"2023-01-01/.tmp-x.tmp":    "temp",
 		"Albums/Trip/Nested/f.m4v": "f",
 	})
-	if got := CountMedia(dir, media.DefaultFilter()); got != 4 {
+	if got := countMedia(t, dir, media.DefaultFilter()); got != 4 {
 		t.Errorf("CountMedia = %d, want 4", got)
 	}
 	noVideo, _ := media.NewFilter(nil, []string{"mp4", "m4v"})
-	if got := CountMedia(dir, noVideo); got != 2 {
+	if got := countMedia(t, dir, noVideo); got != 2 {
 		t.Errorf("CountMedia without videos = %d, want 2", got)
 	}
 }
 
-func TestCountMedia_EmptyAndMissing(t *testing.T) {
-	if got := CountMedia(t.TempDir(), media.DefaultFilter()); got != 0 {
+func TestScan_EmptyAndMissing(t *testing.T) {
+	if got := countMedia(t, t.TempDir(), media.DefaultFilter()); got != 0 {
 		t.Errorf("empty dir: got %d, want 0", got)
 	}
-	if got := CountMedia(filepath.Join(t.TempDir(), "missing"), media.DefaultFilter()); got != 0 {
+	if got := countMedia(t, filepath.Join(t.TempDir(), "missing"), media.DefaultFilter()); got != 0 {
 		t.Errorf("missing dir: got %d, want 0", got)
 	}
 }
@@ -88,11 +106,11 @@ func TestSync_RecordsHashes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := Sync(context.Background(), lib, db, syncOpts())
+	res, err := Sync(context.Background(), scan(t, lib), db, syncOpts())
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
-	if res.Hashed != 3 || len(res.Failed) != 0 || len(res.Unreadable) != 0 {
+	if res.Hashed != 3 || len(res.Failed) != 0 {
 		t.Errorf("result = %+v, want 3 hashed", res)
 	}
 	if err := db.Close(); err != nil {
@@ -105,18 +123,18 @@ func TestSync_RecordsHashes(t *testing.T) {
 		t.Errorf("persisted %d hashes, want 2 (duplicate content shares a hash, non-media ignored)", n)
 	}
 	for _, content := range []string{"content a", "content b"} {
-		if ok, err := db2.Has(hashOf(content)); err != nil || !ok {
+		if ok, err := has(db2, hashOf(content)); err != nil || !ok {
 			t.Errorf("hash for %q missing (has=%v, err=%v)", content, ok, err)
 		}
 	}
-	if ok, _ := db2.Has(hashOf("ignored")); ok {
+	if ok, _ := has(db2, hashOf("ignored")); ok {
 		t.Error("non-media file was hashed")
 	}
 }
 
 func TestSync_EmptyLibrary(t *testing.T) {
 	db := openDB(t, t.TempDir())
-	if res, err := Sync(context.Background(), t.TempDir(), db, syncOpts()); err != nil || res.Hashed != 0 {
+	if res, err := Sync(context.Background(), scan(t, t.TempDir()), db, syncOpts()); err != nil || res.Hashed != 0 {
 		t.Errorf("empty library: %+v, %v", res, err)
 	}
 }
@@ -128,10 +146,10 @@ func TestSync_StopsOnCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := Sync(ctx, lib, db, syncOpts()); !errors.Is(err, context.Canceled) {
+	if _, err := Sync(ctx, scan(t, lib), db, syncOpts()); !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
-	if ok, _ := db.Has(hashOf("a")); ok {
+	if ok, _ := has(db, hashOf("a")); ok {
 		t.Error("files were hashed after cancellation")
 	}
 }
@@ -142,7 +160,7 @@ func TestSync_StopsOnDBFailure(t *testing.T) {
 	db := openDB(t, t.TempDir())
 	db.setErr(errors.New("disk full"))
 
-	if _, err := Sync(context.Background(), lib, db, syncOpts()); err == nil {
+	if _, err := Sync(context.Background(), scan(t, lib), db, syncOpts()); err == nil {
 		t.Error("expected the database failure to be returned")
 	}
 }
@@ -157,7 +175,7 @@ func TestSync_ReportsUnhashableFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	db := openDB(t, t.TempDir())
-	res, err := Sync(context.Background(), lib, db, syncOpts())
+	res, err := Sync(context.Background(), scan(t, lib), db, syncOpts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +197,7 @@ func TestSync_ManyFilesConcurrently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Sync(context.Background(), lib, db, SyncOptions{Workers: 8, Filter: media.DefaultFilter()}); err != nil {
+	if _, err := Sync(context.Background(), scan(t, lib), db, SyncOptions{Workers: 8}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {

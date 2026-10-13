@@ -19,6 +19,7 @@ func TestDateFromFilename(t *testing.T) {
 		{"some/dir/IMG_20231015.jpg", "2023-10-15"},
 		{"random_file_name.jpg", ""},
 		{"20231345_invalid_month.jpg", ""},
+		{"IMG_20230231.jpg", ""}, // Feb 31 must not roll over into March
 	}
 	loc, _ := time.LoadLocation("Pacific/Honolulu")
 	for _, tc := range tests {

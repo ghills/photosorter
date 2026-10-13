@@ -43,7 +43,8 @@ Library/
 │   └── Hawaii Trip/           media from a Google Photos album
 ├── Unknown_Date/              files whose date could not be determined
 ├── .photosorter_cache.db      hash database (see "Duplicate detection")
-└── photosorter_20231012_120000.log   per-run detail log
+├── .photosorter-tmp/          in-progress copies; cleared at the start of each import
+└── photosorter_20231012_120000.log   per-run detail log (dry runs log to the system temp folder)
 ```
 
 If a name is already taken in the destination folder, the new file gets a suffix (`IMG_1234_1.jpg`). Existing files are never overwritten. The folder names and the album behaviour are configurable (see [Configuration](#configuration)).
@@ -85,7 +86,7 @@ The database only knows about files PhotoSorter imported. If you add files to th
 ./photosorter -out ~/Pictures/Library -sync
 ```
 
-A sync also runs on its own when the library contains media but the database is empty, for example on the first run against an existing library. If the library has more files than the database tracks, PhotoSorter warns you. Pass `-no-sync` to turn off the automatic sync.
+A sync also runs on its own when the library contains media but the database is empty, for example on the first run against an existing library. If the library has more media files than it held after the last sync or import, PhotoSorter warns you. Pass `-no-sync` to turn off the automatic sync.
 
 ## Command-line reference
 
@@ -103,11 +104,11 @@ Positional arguments are inputs: folders are imported like `-in`, and anything e
 | `-config <file>` | `<out>/photosorter.toml` | Load settings from this TOML file |
 | `-sync` | off | Hash the existing library before importing |
 | `-no-sync` | off | Never sync automatically (`-nosync` is still accepted) |
-| `-dry-run` | off | Go through the import without writing files or database records |
+| `-dry-run` | off | Go through the import without writing anything to the library (files, database or log) |
 | `-workers <n>` | 8 | Files processed concurrently |
 | `-max-buffer-mb <MB>` | 16 | Files up to this size are read once and kept in memory for hashing, dating and copying. 0 disables this. Peak memory is about `workers × MB` |
 | `-tz <zone>` | machine's zone | IANA zone, e.g. `America/New_York`, used to date sidecar timestamps |
-| `-skip-short-videos <s>` | 3 | Skip MP4/MOV videos this many seconds long or shorter, such as motion-photo clips. 0 imports all videos |
+| `-skip-short-videos <s>` | 3 | Skip MP4/MOV videos this many seconds long or shorter, such as motion-photo clips. 0 imports all videos. Skipped clips aren't recorded, so a later run with a lower value imports them |
 | `-date-format <layout>` | `2006-01-02` | Go time layout for dated folders. Slashes nest: `2006/01` → `2023/05/` |
 | `-unknown-dir <folder>` | `Unknown_Date` | Folder for undated files |
 | `-albums folder\|ignore` | `folder` | Keep albums together, or file their media by date |
@@ -156,10 +157,10 @@ exclude_ext = ["gif"]
                                3 skip short videos (optional)
                                4 date: EXIF → sidecar → file name
                                5 choose folder (layout)
-                               6 copy via temp file, record hash
+                               6 copy via temp file, link into place, record hash
 ```
 
-Copies are written to a temporary file and renamed into place, so an interrupted run never leaves a half-written photo. Hashes are committed to the database in batches by a background writer. If the database stops accepting writes, the run stops, because otherwise files would be imported but not remembered.
+Copies are written to a temporary file and then hard-linked into place under a free name (or, on filesystems without hard links, renamed over a reserved name), so an interrupted run never leaves a half-written photo. With album folders on, album files from every input are imported before the rest, so a photo Takeout also placed in a year folder always lands in its album. Only one import should run on a library at a time. Hashes are committed to the database in batches by a background writer. If the database stops accepting writes, the run stops, because otherwise files would be imported but not remembered.
 
 ## Development
 

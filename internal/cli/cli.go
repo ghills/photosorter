@@ -78,7 +78,12 @@ func (r *runner) run(ctx context.Context) (code int) {
 	}
 	defer source.CloseAll(sources)
 
-	db, err := library.Open(r.cfg.Library)
+	// A dry run must not create the library or touch its database.
+	openDB := library.Open
+	if r.cfg.DryRun {
+		openDB = library.OpenReadOnly
+	}
+	db, err := openDB(r.cfg.Library)
 	if err != nil {
 		r.errorf("cannot open library database: %v", err)
 		return ExitFailure
@@ -94,11 +99,12 @@ func (r *runner) run(ctx context.Context) (code int) {
 		}
 	}()
 
-	if code, ok := r.syncLibrary(ctx, db); !ok {
+	libraryFiles, code, ok := r.syncLibrary(ctx, db)
+	if !ok {
 		return code
 	}
 	if len(sources) > 0 {
-		if code := r.importAll(ctx, db, sources); code != ExitOK {
+		if code := r.importAll(ctx, db, sources, libraryFiles); code != ExitOK {
 			return code
 		}
 	}
@@ -107,52 +113,71 @@ func (r *runner) run(ctx context.Context) (code int) {
 }
 
 // syncLibrary hashes the existing library when asked to, or when the database looks
-// out of date. ok is false if the run should stop with code.
-func (r *runner) syncLibrary(ctx context.Context, db *library.DB) (code int, ok bool) {
+// out of date. It returns how many media files the library is known to hold, for
+// importAll to update. ok is false if the run should stop with code.
+func (r *runner) syncLibrary(ctx context.Context, db *library.DB) (libraryFiles, code int, ok bool) {
 	tracked, err := db.Count()
 	if err != nil {
 		r.errorf("cannot read library database: %v", err)
-		return ExitFailure, false
+		return 0, ExitFailure, false
 	}
 	r.printf("Library database: %d files tracked.\n", tracked)
+	// Databases from older versions don't store the file count; the hash count is the
+	// closest estimate (it undercounts libraries holding duplicate content).
+	libraryFiles, known, err := db.LibraryFiles()
+	if err != nil {
+		r.errorf("cannot read library database: %v", err)
+		return 0, ExitFailure, false
+	}
+	if !known {
+		libraryFiles = tracked
+	}
 
+	if !r.cfg.Sync && r.cfg.NoSync {
+		return libraryFiles, ExitOK, true
+	}
+	files, err := library.Scan(ctx, r.cfg.Library, r.filter)
+	if err != nil { // only cancellation stops a scan
+		r.printf("Interrupted while scanning the library.\n")
+		return 0, ExitInterrupted, false
+	}
 	needed := r.cfg.Sync
-	if !needed && !r.cfg.NoSync {
-		onDisk := library.CountMedia(r.cfg.Library, r.filter)
+	if onDisk := len(files.Paths); !needed {
 		switch {
 		case onDisk > 0 && tracked == 0:
 			r.printf("Found %d media files but an empty database; syncing the library first.\n", onDisk)
 			needed = true
-		case onDisk > tracked:
-			fmt.Fprintf(r.stderr, "warning: the library has %d media files but the database tracks %d. Run with -sync if files were added by other means.\n", onDisk, tracked)
+		case onDisk > libraryFiles:
+			fmt.Fprintf(r.stderr, "warning: the library has %d media files but the database knows of %d. Run with -sync if files were added by other means.\n", onDisk, libraryFiles)
 		}
 	}
 	if !needed {
-		return ExitOK, true
+		return libraryFiles, ExitOK, true
 	}
 
 	r.printf("Syncing library %s...\n", r.cfg.Library)
-	res, err := library.Sync(ctx, r.cfg.Library, db, library.SyncOptions{
+	res, err := library.Sync(ctx, files, db, library.SyncOptions{
 		Workers:  r.cfg.Workers,
-		Filter:   r.filter,
 		Progress: r.stderr,
 	})
-	r.listPaths("could not read", res.Unreadable)
+	r.listPaths("could not read", files.Unreadable)
 	r.listPaths("could not hash", res.Failed)
 	switch {
 	case errors.Is(err, context.Canceled):
 		r.printf("Interrupted during sync.\n")
-		return ExitInterrupted, false
+		return 0, ExitInterrupted, false
 	case err != nil:
 		r.errorf("sync failed: %v", err)
-		return ExitFailure, false
+		return 0, ExitFailure, false
 	}
 	r.printf("Sync complete: %d files hashed.\n", res.Hashed)
-	return ExitOK, true
+	return len(files.Paths), ExitOK, true
 }
 
-// importAll runs the importer over every source and prints its report.
-func (r *runner) importAll(ctx context.Context, db *library.DB, sources []source.Source) int {
+// importAll runs the importer over every source and prints its report. libraryFiles
+// is the library's media file count before the import; the files imported are added
+// to it in the database.
+func (r *runner) importAll(ctx context.Context, db *library.DB, sources []source.Source, libraryFiles int) int {
 	logger, closeLog := r.openLog()
 	defer closeLog()
 
@@ -176,6 +201,11 @@ func (r *runner) importAll(ctx context.Context, db *library.DB, sources []source
 
 	report, err := im.Run(ctx, sources)
 	report.Print(r.stdout)
+	if n := report.TotalImported(); n > 0 && db.Err() == nil {
+		if err := db.SetLibraryFiles(libraryFiles + n); err != nil {
+			fmt.Fprintf(r.stderr, "warning: cannot update the library file count: %v\n", err)
+		}
+	}
 
 	var failed *importer.FilesFailedError
 	switch {
@@ -193,10 +223,14 @@ func (r *runner) importAll(ctx context.Context, db *library.DB, sources []source
 	}
 }
 
-// openLog creates this run's detail log in the library folder. If that fails, the run
-// continues without one.
+// openLog creates this run's detail log in the library folder, or for a dry run in the
+// system temp folder. If that fails, the run continues without one.
 func (r *runner) openLog() (*log.Logger, func()) {
-	path := filepath.Join(r.cfg.Library, fmt.Sprintf("photosorter_%s.log", time.Now().Format("20060102_150405")))
+	dir := r.cfg.Library
+	if r.cfg.DryRun {
+		dir = os.TempDir()
+	}
+	path := filepath.Join(dir, fmt.Sprintf("photosorter_%s.log", time.Now().Format("20060102_150405")))
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "warning: cannot create log file, details will not be saved: %v\n", err)

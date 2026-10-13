@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func openDB(t *testing.T, dir string) *DB {
@@ -19,6 +20,14 @@ func openDB(t *testing.T, dir string) *DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
+}
+
+// has reports whether hash is recorded, in memory or on disk.
+func has(db *DB, hash string) (bool, error) {
+	if v, ok := db.known.Load(hash); ok && v == true {
+		return true, nil
+	}
+	return db.inSQL(hash)
 }
 
 func count(t *testing.T, db *DB) int {
@@ -45,13 +54,13 @@ func TestDB_HasAndRecord(t *testing.T) {
 	db := openDB(t, t.TempDir())
 	const hash = "e3b0c44298fc1c14"
 
-	if ok, err := db.Has(hash); err != nil || ok {
+	if ok, err := has(db, hash); err != nil || ok {
 		t.Fatalf("Has before Record = %v, %v; want false", ok, err)
 	}
 	if err := db.Record(hash, "a.jpg"); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := db.Has(hash); err != nil || !ok {
+	if ok, err := has(db, hash); err != nil || !ok {
 		t.Errorf("Has after Record = %v, %v; want true", ok, err)
 	}
 	// Recording the same hash again is harmless (INSERT OR IGNORE).
@@ -71,6 +80,7 @@ func TestDB_ClaimIsExclusive(t *testing.T) {
 			defer wg.Done()
 			if ok, err := db.Claim("same"); err == nil && ok {
 				winners.Add(1)
+				db.Keep("same") // let the others stop waiting
 			}
 		}()
 	}
@@ -78,10 +88,81 @@ func TestDB_ClaimIsExclusive(t *testing.T) {
 	if winners.Load() != 1 {
 		t.Fatalf("%d goroutines claimed the same hash, want 1", winners.Load())
 	}
+}
 
-	db.Release("same")
+func TestDB_ClaimWaitsForReleasedClaim(t *testing.T) {
+	db := openDB(t, t.TempDir())
 	if ok, _ := db.Claim("same"); !ok {
-		t.Error("a released hash should be claimable again")
+		t.Fatal("first claim failed")
+	}
+	got := make(chan bool)
+	go func() {
+		ok, _ := db.Claim("same")
+		got <- ok
+	}()
+	select {
+	case <-got:
+		t.Fatal("second Claim returned while the first was in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+	// The first importer failed: the waiting one must get to import the content.
+	db.Release("same")
+	if ok := <-got; !ok {
+		t.Error("Claim after Release = false, want true")
+	}
+}
+
+func TestOpenReadOnly_WritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	db := openDB(t, dir)
+	db.Record("persisted", "a.jpg")
+	db.Close()
+
+	ro, err := OpenReadOnly(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := ro.Claim("persisted"); ok {
+		t.Error("read-only DB does not see persisted hash")
+	}
+	ro.Record("new", "b.jpg")
+	if ok, _ := ro.Claim("new"); ok {
+		t.Error("read-only DB forgot an in-memory record")
+	}
+	ro.SetLibraryFiles(5)
+	if err := ro.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(t, openDB(t, dir)); n != 1 {
+		t.Errorf("read-only DB wrote records: count = %d, want 1", n)
+	}
+
+	missing := filepath.Join(t.TempDir(), "missing")
+	ro, err = OpenReadOnly(missing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ro.Record("x", "x.jpg")
+	if n := count(t, ro); n != 0 {
+		t.Errorf("empty read-only DB count = %d", n)
+	}
+	ro.Close()
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Errorf("read-only open created the library folder: %v", err)
+	}
+}
+
+func TestDB_LibraryFiles(t *testing.T) {
+	dir := t.TempDir()
+	db := openDB(t, dir)
+	if _, ok, _ := db.LibraryFiles(); ok {
+		t.Error("new DB should not know its file count")
+	}
+	if err := db.SetLibraryFiles(42); err != nil {
+		t.Fatal(err)
+	}
+	if n, ok, err := db.LibraryFiles(); n != 42 || !ok || err != nil {
+		t.Errorf("LibraryFiles = %d, %v, %v; want 42", n, ok, err)
 	}
 }
 
