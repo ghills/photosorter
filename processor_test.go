@@ -2,40 +2,88 @@ package main
 
 import (
 	"archive/zip"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestGetUniqueDestPath(t *testing.T) {
+func TestReserveDestPath(t *testing.T) {
 	tempDir := t.TempDir()
-
 	basePath := filepath.Join(tempDir, "test.jpg")
 
-	// Should return the base path since it doesn't exist yet
-	got := getUniqueDestPath(basePath)
-	if got != basePath {
-		t.Errorf("getUniqueDestPath() = %q, want %q", got, basePath)
+	// Each call must reserve a distinct name, since the reservation itself creates the file.
+	for _, name := range []string{"test.jpg", "test_1.jpg", "test_2.jpg"} {
+		got, err := reserveDestPath(basePath)
+		if err != nil {
+			t.Fatalf("reserveDestPath() error: %v", err)
+		}
+		if want := filepath.Join(tempDir, name); got != want {
+			t.Errorf("reserveDestPath() = %q, want %q", got, want)
+		}
+	}
+}
+
+// Many workers importing different content under the same filename into the same
+// folder must each keep their own file, and identical content must be imported once.
+func TestProcessor_ConcurrentSameNameAndDuplicates(t *testing.T) {
+	tempDir := t.TempDir()
+	db, _, err := InitDB(filepath.Join(tempDir, "out"))
+	if err != nil {
+		t.Fatalf("InitDB error: %v", err)
+	}
+	defer db.Close()
+
+	zipPath := filepath.Join(tempDir, "test.zip")
+	zf, _ := os.Create(zipPath)
+	zw := zip.NewWriter(zf)
+	const unique = 40
+	for i := 0; i < unique; i++ {
+		// Distinct content, same base name, same date folder.
+		w, _ := zw.Create(fmt.Sprintf("dir%d/IMG_20230101.jpg", i))
+		fmt.Fprintf(w, "unique content %d", i)
+	}
+	for i := 0; i < unique; i++ {
+		// Identical content under different names.
+		w, _ := zw.Create(fmt.Sprintf("same/IMG_20230102_%d.jpg", i))
+		w.Write([]byte("shared content"))
+	}
+	zw.Close()
+	zf.Close()
+
+	src, err := NewZipSource(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(tempDir, "out")
+	if err := NewProcessor([]InputSource{src}, outDir, db, 16, 0, false, nil).Run(); err != nil {
+		t.Fatal(err)
 	}
 
-	// Create the file to trigger a collision
-	os.WriteFile(basePath, []byte("dummy"), 0644)
-
-	// Now it should return test_1.jpg
-	want1 := filepath.Join(tempDir, "test_1.jpg")
-	got1 := getUniqueDestPath(basePath)
-	if got1 != want1 {
-		t.Errorf("getUniqueDestPath() = %q, want %q", got1, want1)
+	count := func(dir string) (n int) {
+		entries, _ := os.ReadDir(filepath.Join(outDir, dir))
+		for _, e := range entries {
+			if !strings.HasSuffix(e.Name(), ".tmp") {
+				n++
+			}
+		}
+		return n
 	}
-
-	// Create test_1.jpg to trigger a second collision
-	os.WriteFile(want1, []byte("dummy"), 0644)
-
-	// Now it should return test_2.jpg
-	want2 := filepath.Join(tempDir, "test_2.jpg")
-	got2 := getUniqueDestPath(basePath)
-	if got2 != want2 {
-		t.Errorf("getUniqueDestPath() = %q, want %q", got2, want2)
+	if got := count("2023-01-01"); got != unique {
+		t.Errorf("2023-01-01 has %d files, want %d (same-name files overwritten)", got, unique)
+	}
+	if got := count("2023-01-02"); got != 1 {
+		t.Errorf("2023-01-02 has %d files, want 1 (identical content imported more than once)", got)
+	}
+	// No leftover temp files.
+	for _, dir := range []string{"2023-01-01", "2023-01-02"} {
+		entries, _ := os.ReadDir(filepath.Join(outDir, dir))
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".tmp") {
+				t.Errorf("leftover temp file %s/%s", dir, e.Name())
+			}
+		}
 	}
 }
 

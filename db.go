@@ -100,6 +100,33 @@ func (h *HashDB) Exists(hash string) (bool, error) {
 	return true, nil
 }
 
+// Claim atomically reserves a hash for the caller. It returns true only for the
+// first caller to claim a hash that is not already recorded, so concurrent workers
+// holding identical content cannot both import it. A successful claim must be
+// followed by Insert (on success) or Release (on failure).
+func (h *HashDB) Claim(hash string) (bool, error) {
+	if _, loaded := h.memCache.LoadOrStore(hash, true); loaded {
+		return false, nil
+	}
+
+	var dummy string
+	err := h.existsStmt.QueryRow(hash).Scan(&dummy)
+	if err == sql.ErrNoRows {
+		return true, nil
+	}
+	if err != nil {
+		h.memCache.Delete(hash)
+		return false, err
+	}
+	// Already persisted; leave it cached so later lookups short-circuit.
+	return false, nil
+}
+
+// Release drops a claim that was not followed by an Insert.
+func (h *HashDB) Release(hash string) {
+	h.memCache.Delete(hash)
+}
+
 func (h *HashDB) Insert(hash, filename string) error {
 	h.memCache.Store(hash, true)
 	h.insertCh <- insertRecord{hash: hash, filename: filename}

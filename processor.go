@@ -144,7 +144,7 @@ func (p *Processor) Run() error {
 }
 
 // processFile handles extracting a single file using a two-pass method to minimize disk writes.
-func (p *Processor) processFile(f MediaFile) (string, error) {
+func (p *Processor) processFile(f MediaFile) (origin string, err error) {
 	// PASS 1: Read the file strictly to calculate its hash
 	rc, err := f.Open()
 	if err != nil {
@@ -157,18 +157,23 @@ func (p *Processor) processFile(f MediaFile) (string, error) {
 		return "", err
 	}
 
-	// Evaluate hash
 	hashStr := hex.EncodeToString(h.Sum(nil))
 
-	exists, err := p.DB.Exists(hashStr)
+	// Atomically claim the hash so concurrent workers can't both import identical content.
+	// Skip extraction entirely if duplicate (Zero Disk Write IO!)
+	claimed, err := p.DB.Claim(hashStr)
 	if err != nil {
 		return "", err
 	}
-
-	// Skip extraction entirely if duplicate (Zero Disk Write IO!)
-	if exists {
+	if !claimed {
 		return "skipped", nil
 	}
+	recorded := false
+	defer func() {
+		if !recorded {
+			p.DB.Release(hashStr)
+		}
+	}()
 
 	if p.SkipShortVideos > 0 && IsMP4Video(f.Name()) {
 		if dur, err := GetMediaDuration(f); err == nil && dur > 0 {
@@ -176,6 +181,7 @@ func (p *Processor) processFile(f MediaFile) (string, error) {
 				if !p.DryRun {
 					// Finalize record so we don't scan it again if re-run
 					_ = p.DB.Insert(hashStr, filepath.Base(f.Name()))
+					recorded = true
 				}
 				return "skipped_short_video", nil
 			}
@@ -196,58 +202,91 @@ func (p *Processor) processFile(f MediaFile) (string, error) {
 	}
 
 	destDir := filepath.Join(p.OutputDir, folderDate)
-	if !p.DryRun {
-		if err := os.MkdirAll(destDir, 0755); err != nil {
-			return "", err
-		}
-	}
-
 	baseName := filepath.Base(f.Name())
-	destPath := getUniqueDestPath(filepath.Join(destDir, baseName))
 
-	if !p.DryRun {
-		// PASS 2: Stream the uncompressed data AGAIN to write it to disk
-		rc2, err := f.Open()
-		if err != nil {
-			return "", err
-		}
-		defer rc2.Close()
-
-		out, err := os.Create(destPath)
-		if err != nil {
-			return "", err
-		}
-		defer out.Close()
-
-		if _, err := io.Copy(out, rc2); err != nil {
-			return "", err
-		}
-
-		// Graceful close of disk file
-		if err := out.Close(); err != nil {
-			return "", err
-		}
-
-		// Finalize record
-		if err := p.DB.Insert(hashStr, baseName); err != nil {
-			return "", err
-		}
+	if p.DryRun {
+		return origin, nil
 	}
+
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return "", err
+	}
+
+	// PASS 2: Stream the uncompressed data AGAIN to write it to disk
+	if err := p.writeFile(f, filepath.Join(destDir, baseName)); err != nil {
+		return "", err
+	}
+
+	// Finalize record
+	if err := p.DB.Insert(hashStr, baseName); err != nil {
+		return "", err
+	}
+	recorded = true
 
 	return origin, nil
 }
 
-func getUniqueDestPath(basePath string) string {
+// writeFile copies f to a free name derived from basePath. The name is reserved
+// atomically (O_EXCL) so concurrent workers never overwrite each other, and the
+// data goes through a temp file so a failed copy never leaves a partial file
+// under its final name.
+func (p *Processor) writeFile(f MediaFile, basePath string) (err error) {
+	destPath, err := reserveDestPath(basePath)
+	if err != nil {
+		return err
+	}
+	tmpPath := ""
+	defer func() {
+		if err != nil {
+			if tmpPath != "" {
+				os.Remove(tmpPath)
+			}
+			os.Remove(destPath) // release the empty reservation
+		}
+	}()
+
+	rc, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+
+	tmp, err := os.CreateTemp(filepath.Dir(destPath), ".photosorter-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath = tmp.Name()
+
+	if _, err = io.Copy(tmp, rc); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	// CreateTemp uses 0600; match the 0666-minus-umask mode os.Create would have used.
+	if err = os.Chmod(tmpPath, 0644); err != nil {
+		return err
+	}
+	// Rename replaces the empty reservation atomically.
+	return os.Rename(tmpPath, destPath)
+}
+
+// reserveDestPath creates an empty file at basePath, or at basePath with a _N suffix
+// if that name is taken, and returns the path it created. O_EXCL makes the check and
+// the creation a single atomic step.
+func reserveDestPath(basePath string) (string, error) {
 	ext := filepath.Ext(basePath)
 	name := strings.TrimSuffix(basePath, ext)
 	out := basePath
-	counter := 1
-	for {
-		if _, err := os.Stat(out); os.IsNotExist(err) {
-			break
+	for counter := 1; ; counter++ {
+		f, err := os.OpenFile(out, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+		if err == nil {
+			return out, f.Close()
+		}
+		if !os.IsExist(err) {
+			return "", err
 		}
 		out = fmt.Sprintf("%s_%d%s", name, counter, ext)
-		counter++
 	}
-	return out
 }
