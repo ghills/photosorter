@@ -26,7 +26,6 @@ type Processor struct {
 	SkipShortVideos int
 	DryRun          bool
 	Logger          *log.Logger
-	TotalItems      int
 
 	// BufferLimit is the largest file (in bytes) read fully into memory so hashing, date
 	// detection and the copy share a single read. Larger files are streamed, one read each
@@ -41,7 +40,11 @@ type Processor struct {
 // DefaultBufferLimit covers typical photos and short clips.
 const DefaultBufferLimit = 16 << 20
 
+// NewProcessor builds a Processor. A nil logger discards detailed log output.
 func NewProcessor(sources []InputSource, outputDir string, db *HashDB, workers int, skipShortVideos int, dryRun bool, logger *log.Logger) *Processor {
+	if logger == nil {
+		logger = log.New(io.Discard, "", 0)
+	}
 	return &Processor{
 		Sources:         sources,
 		OutputDir:       outputDir,
@@ -67,130 +70,16 @@ func (e *FilesFailedError) Error() string {
 }
 
 func (p *Processor) Run(ctx context.Context) error {
-	var duplicatesSkipped int32
-	var countExif int32
-	var countJsonTaken int32
-	var countJsonCreation int32
-	var countFilename int32
-	var countUnknown int32
-	var shortVideosSkipped int32
-	var errorsCount int32
-	var interrupted int32
-	var unreadable int32
+	var stats runStats
 
 	for _, src := range p.Sources {
 		if ctx.Err() != nil || p.DB.Err() != nil {
 			break
 		}
-		if p.Logger != nil {
-			p.Logger.Printf("Scanning source: %s", src.Name())
-		}
-
-		mediaFiles, err := src.MediaFiles()
-		if w, ok := src.(interface{ Warnings() []string }); ok {
-			for _, msg := range w.Warnings() {
-				atomic.AddInt32(&unreadable, 1)
-				if p.Logger != nil {
-					p.Logger.Printf("Skipped unreadable path: %s", msg)
-				}
-			}
-		}
-		if err != nil {
-			if p.Logger != nil {
-				p.Logger.Printf("Failed to scan source %s: %v", src.Name(), err)
-			}
-			fmt.Printf("Failed to scan source %s: %v\n", src.Name(), err)
-			continue
-		}
-
-		if len(mediaFiles) == 0 {
-			continue
-		}
-
-		bar := progressbar.Default(int64(len(mediaFiles)), fmt.Sprintf("Processing %s", src.Name()))
-
-		taskCh := make(chan MediaFile, len(mediaFiles))
-		for _, mF := range mediaFiles {
-			taskCh <- mF
-		}
-		close(taskCh)
-
-		var wg sync.WaitGroup
-		for i := 0; i < p.Workers; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for mF := range taskCh {
-					if ctx.Err() != nil || p.DB.Err() != nil {
-						return
-					}
-					origin, err := p.safeProcessFile(ctx, mF)
-					if errors.Is(err, context.Canceled) {
-						atomic.AddInt32(&interrupted, 1)
-						continue
-					}
-					if err != nil {
-						if p.Logger != nil {
-							p.Logger.Printf("Error processing %s: %v", mF.Name(), err)
-						}
-						atomic.AddInt32(&errorsCount, 1)
-					} else {
-						if origin == "skipped" {
-							atomic.AddInt32(&duplicatesSkipped, 1)
-							if p.Logger != nil {
-								p.Logger.Printf("Skipped duplicate: %s", mF.Name())
-							}
-						} else if origin == "skipped_short_video" {
-							atomic.AddInt32(&shortVideosSkipped, 1)
-							if p.Logger != nil {
-								p.Logger.Printf("Skipped short video: %s", mF.Name())
-							}
-						} else {
-							if p.Logger != nil {
-								p.Logger.Printf("Successfully organized: %s (via %s)", mF.Name(), origin)
-							}
-							switch origin {
-							case "exif":
-								atomic.AddInt32(&countExif, 1)
-							case "json_taken":
-								atomic.AddInt32(&countJsonTaken, 1)
-							case "json_creation":
-								atomic.AddInt32(&countJsonCreation, 1)
-							case "filename":
-								atomic.AddInt32(&countFilename, 1)
-							case "unknown":
-								atomic.AddInt32(&countUnknown, 1)
-							}
-						}
-					}
-					bar.Add(1)
-				}
-			}()
-		}
-		wg.Wait()
+		p.processSource(ctx, src, &stats)
 	}
 
-	totalOrganized := countExif + countJsonTaken + countJsonCreation + countFilename + countUnknown
-
-	fmt.Printf("\n\n--- Final Report ---\n")
-	if p.DryRun {
-		fmt.Printf("[DRY RUN MODE - No files were written]\n")
-	}
-	fmt.Printf("Successfully Organized   : %d\n", totalOrganized)
-	fmt.Printf("  └ via EXIF             : %d\n", countExif)
-	fmt.Printf("  └ via JSON (Taken)     : %d\n", countJsonTaken)
-	fmt.Printf("  └ via JSON (Creation)  : %d\n", countJsonCreation)
-	fmt.Printf("  └ via Filename Regex   : %d\n", countFilename)
-	fmt.Printf("  └ Sent to Unknown_Date : %d\n", countUnknown)
-	fmt.Printf("Duplicates Skipped       : %d\n", duplicatesSkipped)
-	fmt.Printf("Short Videos Skipped     : %d\n", shortVideosSkipped)
-	fmt.Printf("Errors                   : %d\n", errorsCount)
-	if unreadable > 0 {
-		fmt.Printf("Unreadable Paths Skipped : %d (see log)\n", unreadable)
-	}
-	if interrupted > 0 {
-		fmt.Printf("Aborted mid-copy         : %d (safe to re-run)\n", interrupted)
-	}
+	p.printReport(&stats)
 
 	if err := p.DB.Err(); err != nil {
 		return fmt.Errorf("database write failed: %w", err)
@@ -198,15 +87,144 @@ func (p *Processor) Run(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if errorsCount > 0 {
-		return &FilesFailedError{Count: int(errorsCount)}
+	if n := stats.errors.Load(); n > 0 {
+		return &FilesFailedError{Count: int(n)}
 	}
 	return nil
 }
 
+// processSource runs every media file of one source through the worker pool.
+func (p *Processor) processSource(ctx context.Context, src InputSource, stats *runStats) {
+	p.Logger.Printf("Scanning source: %s", src.Name())
+
+	mediaFiles, err := src.MediaFiles()
+	if w, ok := src.(interface{ Warnings() []string }); ok {
+		for _, msg := range w.Warnings() {
+			stats.unreadable.Add(1)
+			p.Logger.Printf("Skipped unreadable path: %s", msg)
+		}
+	}
+	if err != nil {
+		p.Logger.Printf("Failed to scan source %s: %v", src.Name(), err)
+		fmt.Printf("Failed to scan source %s: %v\n", src.Name(), err)
+		return
+	}
+	if len(mediaFiles) == 0 {
+		return
+	}
+
+	bar := progressbar.Default(int64(len(mediaFiles)), fmt.Sprintf("Processing %s", src.Name()))
+
+	taskCh := make(chan MediaFile, len(mediaFiles))
+	for _, mF := range mediaFiles {
+		taskCh <- mF
+	}
+	close(taskCh)
+
+	var wg sync.WaitGroup
+	for i := 0; i < p.Workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for mF := range taskCh {
+				if ctx.Err() != nil || p.DB.Err() != nil {
+					return
+				}
+				p.handle(ctx, mF, stats)
+				bar.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// handle processes one file and records its outcome in the log and the run statistics.
+func (p *Processor) handle(ctx context.Context, f MediaFile, stats *runStats) {
+	res, err := p.safeProcessFile(ctx, f)
+	switch {
+	case errors.Is(err, context.Canceled):
+		stats.interrupted.Add(1)
+	case err != nil:
+		p.Logger.Printf("Error processing %s: %v", f.Name(), err)
+		stats.errors.Add(1)
+	case res.Outcome == SkippedDuplicate:
+		stats.duplicates.Add(1)
+		p.Logger.Printf("Skipped duplicate: %s", f.Name())
+	case res.Outcome == SkippedShortVideo:
+		stats.shortVideos.Add(1)
+		p.Logger.Printf("Skipped short video: %s", f.Name())
+	default:
+		stats.countDate(res.Date)
+		p.Logger.Printf("Successfully organized: %s (via %s)", f.Name(), res.Date)
+	}
+}
+
+func (p *Processor) printReport(s *runStats) {
+	fmt.Printf("\n\n--- Final Report ---\n")
+	if p.DryRun {
+		fmt.Printf("[DRY RUN MODE - No files were written]\n")
+	}
+	fmt.Printf("Successfully Organized   : %d\n", s.organized())
+	fmt.Printf("  └ via EXIF             : %d\n", s.exif.Load())
+	fmt.Printf("  └ via JSON (Taken)     : %d\n", s.jsonTaken.Load())
+	fmt.Printf("  └ via JSON (Creation)  : %d\n", s.jsonCreation.Load())
+	fmt.Printf("  └ via Filename Regex   : %d\n", s.filename.Load())
+	fmt.Printf("  └ Sent to Unknown_Date : %d\n", s.unknown.Load())
+	fmt.Printf("Duplicates Skipped       : %d\n", s.duplicates.Load())
+	fmt.Printf("Short Videos Skipped     : %d\n", s.shortVideos.Load())
+	fmt.Printf("Errors                   : %d\n", s.errors.Load())
+	if n := s.unreadable.Load(); n > 0 {
+		fmt.Printf("Unreadable Paths Skipped : %d (see log)\n", n)
+	}
+	if n := s.interrupted.Load(); n > 0 {
+		fmt.Printf("Aborted mid-copy         : %d (safe to re-run)\n", n)
+	}
+}
+
+// Outcome says what happened to a file that was processed without error.
+type Outcome int
+
+const (
+	Organized Outcome = iota
+	SkippedDuplicate
+	SkippedShortVideo
+)
+
+// Result is what processFile reports for one file. Date is only meaningful when Outcome is Organized.
+type Result struct {
+	Outcome Outcome
+	Date    DateSource
+}
+
+// runStats holds the counters behind the final report; all fields are safe for concurrent use.
+type runStats struct {
+	exif, jsonTaken, jsonCreation, filename, unknown atomic.Int64
+	duplicates, shortVideos                          atomic.Int64
+	errors, interrupted, unreadable                  atomic.Int64
+}
+
+func (s *runStats) countDate(d DateSource) {
+	switch d {
+	case DateFromEXIF:
+		s.exif.Add(1)
+	case DateFromJSONTaken:
+		s.jsonTaken.Add(1)
+	case DateFromJSONCreation:
+		s.jsonCreation.Add(1)
+	case DateFromFilename:
+		s.filename.Add(1)
+	case DateUnknown:
+		s.unknown.Add(1)
+	}
+}
+
+func (s *runStats) organized() int64 {
+	return s.exif.Load() + s.jsonTaken.Load() + s.jsonCreation.Load() + s.filename.Load() + s.unknown.Load()
+}
+
 // safeProcessFile converts a panic while handling one file into an error so a single
 // bad file can't take down the whole run.
-func (p *Processor) safeProcessFile(ctx context.Context, f MediaFile) (origin string, err error) {
+func (p *Processor) safeProcessFile(ctx context.Context, f MediaFile) (res Result, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic: %v", r)
@@ -216,12 +234,12 @@ func (p *Processor) safeProcessFile(ctx context.Context, f MediaFile) (origin st
 }
 
 // processFile handles extracting a single file using a two-pass method to minimize disk writes.
-func (p *Processor) processFile(ctx context.Context, f MediaFile) (origin string, err error) {
+func (p *Processor) processFile(ctx context.Context, f MediaFile) (res Result, err error) {
 	// PASS 1: Read the file to calculate its hash. Small files are kept in memory so the
 	// remaining steps (date detection, copy) don't have to read the source again.
 	hashStr, f, release, err := p.hashAndBuffer(ctx, f)
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 	defer release()
 
@@ -229,10 +247,10 @@ func (p *Processor) processFile(ctx context.Context, f MediaFile) (origin string
 	// Skip extraction entirely if duplicate (Zero Disk Write IO!)
 	claimed, err := p.DB.Claim(hashStr)
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 	if !claimed {
-		return "skipped", nil
+		return Result{Outcome: SkippedDuplicate}, nil
 	}
 	recorded := false
 	defer func() {
@@ -249,19 +267,19 @@ func (p *Processor) processFile(ctx context.Context, f MediaFile) (origin string
 					_ = p.DB.Insert(hashStr, filepath.Base(f.Name()))
 					recorded = true
 				}
-				return "skipped_short_video", nil
+				return Result{Outcome: SkippedShortVideo}, nil
 			}
 		}
 	}
 
 	// 1. Determine destination path
-	captureTime, origin := FindCaptureDate(f)
+	captureTime, date := FindCaptureDate(f)
 	albumName := ExtractAlbumName(f.Name())
 
 	var folderDate string
 	if albumName != "" {
 		folderDate = filepath.Join("Albums", albumName)
-	} else if origin == "unknown" {
+	} else if date == DateUnknown {
 		folderDate = "Unknown_Date"
 	} else {
 		folderDate = captureTime.Format("2006-01-02")
@@ -271,25 +289,25 @@ func (p *Processor) processFile(ctx context.Context, f MediaFile) (origin string
 	baseName := filepath.Base(f.Name())
 
 	if p.DryRun {
-		return origin, nil
+		return Result{Date: date}, nil
 	}
 
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	// PASS 2: Stream the uncompressed data AGAIN to write it to disk
 	if err := p.writeFile(ctx, f, filepath.Join(destDir, baseName)); err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	// Finalize record
 	if err := p.DB.Insert(hashStr, baseName); err != nil {
-		return "", err
+		return Result{}, err
 	}
 	recorded = true
 
-	return origin, nil
+	return Result{Date: date}, nil
 }
 
 // writeFile copies f to a free name derived from basePath. The name is reserved

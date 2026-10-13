@@ -47,11 +47,22 @@ type GooglePhotoMetadata struct {
 	} `json:"photoTakenTime"`
 }
 
+// DateSource records how a media file's capture date was determined.
+type DateSource string
+
+const (
+	DateFromEXIF         DateSource = "exif"
+	DateFromJSONTaken    DateSource = "json_taken"
+	DateFromJSONCreation DateSource = "json_creation"
+	DateFromFilename     DateSource = "filename"
+	DateUnknown          DateSource = "unknown"
+)
+
 // FindCaptureDate attempts to determine the date a media file was taken.
 // It checks EXIF data first (reading a 256KB header), then checks associated Google Photos
 // metadata JSON sidecars, and finally falls back to parsing dates out of the filename.
 // Returns the parsed time object and the origin method used to find it.
-func FindCaptureDate(f MediaFile) (time.Time, string) {
+func FindCaptureDate(f MediaFile) (time.Time, DateSource) {
 	// First: Try reading Exif directly from zip stream
 	if IsImage(f.Name()) {
 		rc, err := f.Open()
@@ -62,7 +73,7 @@ func FindCaptureDate(f MediaFile) (time.Time, string) {
 				tm, err := x.DateTime()
 				if err == nil {
 					rc.Close()
-					return tm, "exif"
+					return tm, DateFromEXIF
 				}
 			}
 			rc.Close()
@@ -78,13 +89,13 @@ func FindCaptureDate(f MediaFile) (time.Time, string) {
 			if metadata.PhotoTakenTime.Timestamp != "" {
 				ts, err := strconv.ParseInt(metadata.PhotoTakenTime.Timestamp, 10, 64)
 				if err == nil && ts > 0 {
-					return time.Unix(ts, 0), "json_taken"
+					return time.Unix(ts, 0), DateFromJSONTaken
 				}
 			}
 			if metadata.CreationTime.Timestamp != "" {
 				ts, err := strconv.ParseInt(metadata.CreationTime.Timestamp, 10, 64)
 				if err == nil && ts > 0 {
-					return time.Unix(ts, 0), "json_creation"
+					return time.Unix(ts, 0), DateFromJSONCreation
 				}
 			}
 		}
@@ -92,11 +103,11 @@ func FindCaptureDate(f MediaFile) (time.Time, string) {
 
 	// Third: Fallback to reading the date from filename
 	if tm, found := parseDateFromFilename(f.Name()); found {
-		return tm, "filename"
+		return tm, DateFromFilename
 	}
 
 	// Fallback to unknown
-	return time.Time{}, "unknown"
+	return time.Time{}, DateUnknown
 }
 
 // IsImage checks if a filename extension corresponds to a commonly EXIF-supported format.

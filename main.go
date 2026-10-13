@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -59,48 +60,11 @@ func run() int {
 		time.Local = loc
 	}
 
-	var sources []InputSource
-	// Shared so a sidecar in one zip part can describe media in another.
-	sidecars := NewSidecarIndex()
-
-	if *inFlag != "" {
-		_, err := os.Stat(*inFlag)
-		if err != nil {
-			fmt.Printf("Input directory does not exist or cannot be accessed: %s\n", *inFlag)
-			return 1
-		}
-		if pathsOverlap(*inFlag, *outFlag) {
-			fmt.Printf("The input folder (%s) and output folder (%s) must not contain one another.\n", *inFlag, *outFlag)
-			return 1
-		}
-		sources = append(sources, NewLocalFolderSource(*inFlag, sidecars))
+	sources, err := buildSources(*inFlag, *zipFlag, *outFlag)
+	if err != nil {
+		fmt.Println(err)
+		return 1
 	}
-
-	if *zipFlag != "" {
-		if strings.Contains(*zipFlag, "*") || strings.Contains(*zipFlag, "?") {
-			matches, err := filepath.Glob(*zipFlag)
-			if err != nil || len(matches) == 0 {
-				fmt.Printf("No zip files matched pattern: %s\n", *zipFlag)
-				return 1
-			}
-			for _, m := range matches {
-				src, err := NewZipSource(m, sidecars)
-				if err != nil {
-					fmt.Printf("Failed to open zip source %s: %v\n", m, err)
-					return 1
-				}
-				sources = append(sources, src)
-			}
-		} else {
-			src, err := NewZipSource(*zipFlag, sidecars)
-			if err != nil {
-				fmt.Printf("Input zip file does not exist or is invalid: %s\n", *zipFlag)
-				return 1
-			}
-			sources = append(sources, src)
-		}
-	}
-
 	defer func() {
 		for _, src := range sources {
 			src.Close()
@@ -169,20 +133,9 @@ func run() int {
 		}
 	}
 
-	var logger *log.Logger
-	logFilePath := filepath.Join(*outFlag, fmt.Sprintf("photosorter_%s.log", time.Now().Format("20060102_150405")))
-	logFile, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
-	if err == nil {
-		logger = log.New(logFile, "", log.LstdFlags)
-		fmt.Printf("Logging detailed output to: %s\n", logFilePath)
-		defer logFile.Close()
-	} else {
-		fmt.Printf("Warning: failed to open log file, detailed logs will not be saved: %v\n", err)
-		// Fallback to a discard logger if it fails to open
-		logger = log.New(os.Stderr, "", log.LstdFlags)
-	}
-
 	if len(sources) > 0 {
+		logger, closeLog := openLogger(*outFlag)
+		defer closeLog()
 		processor := NewProcessor(sources, *outFlag, db, *workersFlag, *skipShortVideosFlag, *dryRunFlag, logger)
 		processor.BufferLimit = int64(*bufferMBFlag) << 20
 		err = processor.Run(ctx)
@@ -209,4 +162,67 @@ func run() int {
 	}
 	fmt.Println("Done!")
 	return 0
+}
+
+// buildSources opens the requested input sources. All sources share one sidecar index so a
+// sidecar in one zip part can describe media in another. On error nothing is left open.
+func buildSources(inDir, zipArg, outDir string) (sources []InputSource, err error) {
+	defer func() {
+		if err != nil {
+			for _, src := range sources {
+				src.Close()
+			}
+			sources = nil
+		}
+	}()
+	sidecars := NewSidecarIndex()
+
+	if inDir != "" {
+		if _, err := os.Stat(inDir); err != nil {
+			return sources, fmt.Errorf("Input directory does not exist or cannot be accessed: %s", inDir)
+		}
+		if pathsOverlap(inDir, outDir) {
+			return sources, fmt.Errorf("The input folder (%s) and output folder (%s) must not contain one another.", inDir, outDir)
+		}
+		sources = append(sources, NewLocalFolderSource(inDir, sidecars))
+	}
+
+	if zipArg == "" {
+		return sources, nil
+	}
+
+	// A path that exists is taken literally, even if its name contains glob characters.
+	if _, statErr := os.Stat(zipArg); statErr != nil && strings.ContainsAny(zipArg, "*?[") {
+		matches, globErr := filepath.Glob(zipArg)
+		if globErr != nil || len(matches) == 0 {
+			return sources, fmt.Errorf("No zip files matched pattern: %s", zipArg)
+		}
+		for _, m := range matches {
+			src, err := NewZipSource(m, sidecars)
+			if err != nil {
+				return sources, fmt.Errorf("Failed to open zip source %s: %v", m, err)
+			}
+			sources = append(sources, src)
+		}
+		return sources, nil
+	}
+
+	src, err := NewZipSource(zipArg, sidecars)
+	if err != nil {
+		return sources, fmt.Errorf("Input zip file does not exist or is invalid: %s", zipArg)
+	}
+	return append(sources, src), nil
+}
+
+// openLogger creates the per-run detail log in the output folder. If the file can't be
+// created, detailed logs are discarded (the user is told) rather than aborting the run.
+func openLogger(outDir string) (*log.Logger, func()) {
+	path := filepath.Join(outDir, fmt.Sprintf("photosorter_%s.log", time.Now().Format("20060102_150405")))
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		fmt.Printf("Warning: failed to open log file, detailed logs will not be saved: %v\n", err)
+		return log.New(io.Discard, "", 0), func() {}
+	}
+	fmt.Printf("Logging detailed output to: %s\n", path)
+	return log.New(f, "", log.LstdFlags), func() { f.Close() }
 }
