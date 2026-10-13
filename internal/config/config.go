@@ -22,6 +22,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"photosorter/internal/importer"
 	"photosorter/internal/media"
 )
 
@@ -100,17 +101,22 @@ type Media struct {
 	ExcludeExt []string `toml:"exclude_ext"`
 }
 
-// Default returns the built-in settings.
+// Default returns the built-in settings. The layout is the importer's default.
 func Default() Config {
+	l := importer.DefaultLayout()
+	albums := AlbumsIgnore
+	if l.KeepAlbums {
+		albums = AlbumsFolder
+	}
 	return Config{
 		Workers:         8,
 		MaxBufferMB:     16,
 		SkipShortVideos: 3,
 		Layout: Layout{
-			DateFormat: "2006-01-02",
-			UnknownDir: "Unknown_Date",
-			Albums:     AlbumsFolder,
-			AlbumsDir:  "Albums",
+			DateFormat: l.DateFormat,
+			UnknownDir: l.UnknownDir,
+			Albums:     albums,
+			AlbumsDir:  l.AlbumsDir,
 		},
 	}
 }

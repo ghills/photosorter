@@ -6,8 +6,10 @@
 //  1. Hash the content. Small files are read into memory once, and the later steps
 //     reuse that copy (see BufferLimit).
 //  2. Claim the hash in the library database. If it is already there, the file is a
-//     duplicate and nothing is written.
+//     duplicate and nothing is written. If another worker is importing the same
+//     content, wait for it: if that import fails, this file takes over.
 //  3. Optionally skip very short videos, such as the clips behind motion photos.
+//     They are not recorded, so a lower threshold later can still import them.
 //  4. Work out when it was taken: EXIF, then the Takeout sidecar's photoTakenTime,
 //     then its creationTime, then a date in the file name.
 //  5. Choose a folder with [Layout]: an album folder, a date folder, or the

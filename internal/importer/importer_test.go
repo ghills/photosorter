@@ -41,6 +41,25 @@ func TestRun_ImportsAndSkipsDuplicates(t *testing.T) {
 	}
 }
 
+// Takeout puts album media in a year folder too. Whichever copy comes first, the album
+// copy decides where the file goes.
+func TestRun_AlbumCopyWinsOverYearFolder(t *testing.T) {
+	im, _ := newTestImporter(t, Options{Workers: 1})
+	report := run(t, im, sourceOf(
+		newMemFile("Takeout/Google Photos/Photos from 2023/IMG_20230101.jpg", "same"),
+		newMemFile("Takeout/Google Photos/Trip/IMG_20230101.jpg", "same"),
+	))
+	if got := readFile(t, im.opts.Library, "Albums", "Trip", "IMG_20230101.jpg"); got != "same" {
+		t.Errorf("album copy = %q", got)
+	}
+	if names := listDir(t, filepath.Join(im.opts.Library, "2023-01-01")); len(names) != 0 {
+		t.Errorf("year-folder copy imported: %v", names)
+	}
+	if report.TotalImported() != 1 || report.Duplicates != 1 {
+		t.Errorf("report = %+v", report)
+	}
+}
+
 // Many workers importing different content under the same name into the same folder
 // must each keep their own file, and identical content must be imported once.
 func TestRun_ConcurrentSameNameAndDuplicates(t *testing.T) {
@@ -154,7 +173,7 @@ func TestRun_SkipsShortVideos(t *testing.T) {
 	long := &memFile{name: "VID_20230101_long.mp4", content: mp4(10 * time.Second)}
 	short.size, long.size = int64(len(short.content)), int64(len(long.content))
 
-	im, _ := newTestImporter(t, Options{SkipVideosUpTo: 3 * time.Second, BufferLimit: DefaultBufferLimit})
+	im, _ := newTestImporter(t, Options{SkipVideosUpTo: 3 * time.Second, BufferLimit: 16 << 20})
 	report := run(t, im, sourceOf(short, long))
 	if report.ShortVideos != 1 || report.TotalImported() != 1 {
 		t.Errorf("report = %+v, want 1 short video skipped and 1 imported", report)
@@ -163,9 +182,10 @@ func TestRun_SkipsShortVideos(t *testing.T) {
 		t.Errorf("imported %v, want only the long video", names)
 	}
 
-	// The skipped clip is remembered, so it counts as a duplicate next time.
-	if report := run(t, im, sourceOf(short)); report.Duplicates != 1 {
-		t.Errorf("rerun report = %+v, want the short video as a duplicate", report)
+	// The skipped clip is not recorded, so it is checked again rather than counted as a
+	// duplicate.
+	if report := run(t, im, sourceOf(short)); report.ShortVideos != 1 || report.Duplicates != 0 {
+		t.Errorf("rerun report = %+v, want the short video skipped again", report)
 	}
 
 	// With the threshold off, short videos are imported.
