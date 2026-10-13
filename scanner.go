@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -27,7 +28,7 @@ func CountMediaFiles(dir string) (int, error) {
 }
 
 // SyncFolderWithDB hashes all media files in the target directory and inserts them into the DB.
-func SyncFolderWithDB(dir string, db *HashDB) error {
+func SyncFolderWithDB(ctx context.Context, dir string, db *HashDB) error {
 	var mediaFiles []string
 
 	fmt.Println("Scanning directory for media files...")
@@ -52,6 +53,12 @@ func SyncFolderWithDB(dir string, db *HashDB) error {
 	bar := progressbar.Default(int64(len(mediaFiles)), "Syncing to database")
 
 	for _, path := range mediaFiles {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := db.Err(); err != nil {
+			return err
+		}
 		err := appendToDB(path, db)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "\nError hashing %s: %v\n", path, err)
@@ -60,7 +67,7 @@ func SyncFolderWithDB(dir string, db *HashDB) error {
 	}
 
 	fmt.Println("\nSync complete.")
-	return nil
+	return db.Err()
 }
 
 func appendToDB(filePath string, db *HashDB) error {

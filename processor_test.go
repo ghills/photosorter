@@ -2,6 +2,8 @@ package main
 
 import (
 	"archive/zip"
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -57,7 +59,7 @@ func TestProcessor_ConcurrentSameNameAndDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 	outDir := filepath.Join(tempDir, "out")
-	if err := NewProcessor([]InputSource{src}, outDir, db, 16, 0, false, nil).Run(); err != nil {
+	if err := NewProcessor([]InputSource{src}, outDir, db, 16, 0, false, nil).Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -131,7 +133,7 @@ func TestProcessor_ProcessDuplicateAndNew(t *testing.T) {
 		t.Fatalf("Error creating ZipSource: %v", err)
 	}
 	processor := NewProcessor([]InputSource{src}, outDir, db, 1, 2, false, nil)
-	err = processor.Run()
+	err = processor.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Processor Run error: %v", err)
 	}
@@ -148,5 +150,66 @@ func TestProcessor_ProcessDuplicateAndNew(t *testing.T) {
 	expectedDuplicateDest := filepath.Join(outDir, "2023-01-02", "IMG_20230102.jpg")
 	if _, err := os.Stat(expectedDuplicateDest); !os.IsNotExist(err) {
 		t.Errorf("Duplicate file was erroneously extracted: %s", expectedDuplicateDest)
+	}
+}
+
+func TestProcessor_RunStopsOnCancelledContext(t *testing.T) {
+	tempDir := t.TempDir()
+	outDir := filepath.Join(tempDir, "out")
+	db, _, err := InitDB(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	zipPath := filepath.Join(tempDir, "test.zip")
+	zf, _ := os.Create(zipPath)
+	zw := zip.NewWriter(zf)
+	for i := 0; i < 20; i++ {
+		w, _ := zw.Create(fmt.Sprintf("IMG_20230101_%d.jpg", i))
+		fmt.Fprintf(w, "content %d", i)
+	}
+	zw.Close()
+	zf.Close()
+	src, err := NewZipSource(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err = NewProcessor([]InputSource{src}, outDir, db, 4, 0, false, nil).Run(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Join(outDir, "2023-01-01")); len(entries) != 0 {
+		t.Errorf("%d files written after cancellation", len(entries))
+	}
+}
+
+func TestProcessor_RunReportsDatabaseFailure(t *testing.T) {
+	tempDir := t.TempDir()
+	outDir := filepath.Join(tempDir, "out")
+	db, _, err := InitDB(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.setErr(errors.New("disk full"))
+
+	zipPath := filepath.Join(tempDir, "test.zip")
+	zf, _ := os.Create(zipPath)
+	zw := zip.NewWriter(zf)
+	w, _ := zw.Create("IMG_20230101.jpg")
+	w.Write([]byte("content"))
+	zw.Close()
+	zf.Close()
+	src, _ := NewZipSource(zipPath)
+
+	err = NewProcessor([]InputSource{src}, outDir, db, 1, 0, false, nil).Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Errorf("Run error = %v, want database failure", err)
+	}
+	if err := db.Close(); err == nil {
+		t.Error("Close should return the recorded write error")
 	}
 }

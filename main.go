@@ -1,16 +1,28 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
+const exitInterrupted = 130
+
 func main() {
+	os.Exit(run())
+}
+
+// run holds the program body so deferred cleanup (flushing the database, closing
+// sources and the log) always executes before the process exits.
+func run() int {
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "PhotoSorter - Google Photos Takeout Organizer\n\n")
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage:\n")
@@ -32,7 +44,7 @@ func main() {
 
 	if *outFlag == "" {
 		fmt.Println("An output folder (-out) is required.")
-		os.Exit(1)
+		return 1
 	}
 
 	var sources []InputSource
@@ -41,7 +53,7 @@ func main() {
 		_, err := os.Stat(*inFlag)
 		if err != nil {
 			fmt.Printf("Input directory does not exist or cannot be accessed: %s\n", *inFlag)
-			os.Exit(1)
+			return 1
 		}
 		sources = append(sources, NewLocalFolderSource(*inFlag))
 	}
@@ -51,13 +63,13 @@ func main() {
 			matches, err := filepath.Glob(*zipFlag)
 			if err != nil || len(matches) == 0 {
 				fmt.Printf("No zip files matched pattern: %s\n", *zipFlag)
-				os.Exit(1)
+				return 1
 			}
 			for _, m := range matches {
 				src, err := NewZipSource(m)
 				if err != nil {
 					fmt.Printf("Failed to open zip source %s: %v\n", m, err)
-					os.Exit(1)
+					return 1
 				}
 				sources = append(sources, src)
 			}
@@ -65,24 +77,51 @@ func main() {
 			src, err := NewZipSource(*zipFlag)
 			if err != nil {
 				fmt.Printf("Input zip file does not exist or is invalid: %s\n", *zipFlag)
-				os.Exit(1)
+				return 1
 			}
 			sources = append(sources, src)
 		}
 	}
 
+	defer func() {
+		for _, src := range sources {
+			src.Close()
+		}
+	}()
+
 	if len(sources) == 0 && !*syncFlag {
 		fmt.Println("Usage: photosorter -in <path> -out <path>  OR  photosorter -zip <path> -out <path>")
-		os.Exit(1)
+		return 1
 	}
+
+	// First Ctrl-C / SIGTERM stops work gracefully; a second one restores the default and kills the process.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
 
 	fmt.Println("Initializing output directory and database cache...")
 	db, trackedCount, err := InitDB(*outFlag)
 	if err != nil {
 		fmt.Printf("Failed to initialize database: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
-	defer db.Close()
+	dbClosed := false
+	closeDB := func() int {
+		if dbClosed {
+			return 0
+		}
+		dbClosed = true
+		if err := db.Close(); err != nil {
+			fmt.Printf("Error: failed to save records to the database: %v\n", err)
+			fmt.Println("Files already written may be re-imported on the next run; run with -sync to rebuild the cache.")
+			return 1
+		}
+		return 0
+	}
+	defer closeDB()
 	fmt.Printf("Database cache loaded: %d files tracked.\n", trackedCount)
 
 	// check for auto-sync conditions
@@ -100,9 +139,15 @@ func main() {
 	}
 
 	if needsSync {
-		err = SyncFolderWithDB(*outFlag, db)
+		err = SyncFolderWithDB(ctx, *outFlag, db)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				fmt.Println("\nInterrupted during sync.")
+				closeDB()
+				return exitInterrupted
+			}
 			fmt.Printf("Sync failed: %v\n", err)
+			return 1
 		}
 	}
 
@@ -121,12 +166,22 @@ func main() {
 
 	if len(sources) > 0 {
 		processor := NewProcessor(sources, *outFlag, db, *workersFlag, *skipShortVideosFlag, *dryRunFlag, logger)
-		err = processor.Run()
+		err = processor.Run(ctx)
+		if errors.Is(err, context.Canceled) {
+			fmt.Println("Interrupted. Finished files were recorded; re-run to continue.")
+			closeDB()
+			return exitInterrupted
+		}
 		if err != nil {
 			fmt.Printf("Pipeline error: %v\n", err)
-			os.Exit(1)
+			closeDB()
+			return 1
 		}
 	}
 
+	if code := closeDB(); code != 0 {
+		return code
+	}
 	fmt.Println("Done!")
+	return 0
 }

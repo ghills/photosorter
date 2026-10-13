@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -38,7 +40,10 @@ func NewProcessor(sources []InputSource, outputDir string, db *HashDB, workers i
 	}
 }
 
-func (p *Processor) Run() error {
+// Run processes every source. It stops early, after finishing or aborting in-flight
+// files, when ctx is cancelled or the database stops accepting writes. In both cases
+// the final report is still printed and the cause is returned.
+func (p *Processor) Run(ctx context.Context) error {
 	var duplicatesSkipped int32
 	var countExif int32
 	var countJsonTaken int32
@@ -47,8 +52,12 @@ func (p *Processor) Run() error {
 	var countUnknown int32
 	var shortVideosSkipped int32
 	var errorsCount int32
+	var interrupted int32
 
 	for _, src := range p.Sources {
+		if ctx.Err() != nil || p.DB.Err() != nil {
+			break
+		}
 		if p.Logger != nil {
 			p.Logger.Printf("Scanning source: %s", src.Name())
 		}
@@ -59,6 +68,7 @@ func (p *Processor) Run() error {
 				p.Logger.Printf("Failed to scan source %s: %v", src.Name(), err)
 			}
 			fmt.Printf("Failed to scan source %s: %v\n", src.Name(), err)
+			src.Close()
 			continue
 		}
 
@@ -81,7 +91,14 @@ func (p *Processor) Run() error {
 			go func() {
 				defer wg.Done()
 				for mF := range taskCh {
-					origin, err := p.safeProcessFile(mF)
+					if ctx.Err() != nil || p.DB.Err() != nil {
+						return
+					}
+					origin, err := p.safeProcessFile(ctx, mF)
+					if errors.Is(err, context.Canceled) {
+						atomic.AddInt32(&interrupted, 1)
+						continue
+					}
 					if err != nil {
 						if p.Logger != nil {
 							p.Logger.Printf("Error processing %s: %v", mF.Name(), err)
@@ -139,23 +156,29 @@ func (p *Processor) Run() error {
 	fmt.Printf("Duplicates Skipped       : %d\n", duplicatesSkipped)
 	fmt.Printf("Short Videos Skipped     : %d\n", shortVideosSkipped)
 	fmt.Printf("Errors                   : %d\n", errorsCount)
+	if interrupted > 0 {
+		fmt.Printf("Aborted mid-copy         : %d (safe to re-run)\n", interrupted)
+	}
 
-	return nil
+	if err := p.DB.Err(); err != nil {
+		return fmt.Errorf("database write failed: %w", err)
+	}
+	return ctx.Err()
 }
 
 // safeProcessFile converts a panic while handling one file into an error so a single
 // bad file can't take down the whole run.
-func (p *Processor) safeProcessFile(f MediaFile) (origin string, err error) {
+func (p *Processor) safeProcessFile(ctx context.Context, f MediaFile) (origin string, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic: %v", r)
 		}
 	}()
-	return p.processFile(f)
+	return p.processFile(ctx, f)
 }
 
 // processFile handles extracting a single file using a two-pass method to minimize disk writes.
-func (p *Processor) processFile(f MediaFile) (origin string, err error) {
+func (p *Processor) processFile(ctx context.Context, f MediaFile) (origin string, err error) {
 	// PASS 1: Read the file strictly to calculate its hash
 	rc, err := f.Open()
 	if err != nil {
@@ -164,7 +187,7 @@ func (p *Processor) processFile(f MediaFile) (origin string, err error) {
 	defer rc.Close()
 
 	h := xxhash.New()
-	if _, err := io.Copy(h, rc); err != nil {
+	if _, err := io.Copy(h, &ctxReader{ctx: ctx, r: rc}); err != nil {
 		return "", err
 	}
 
@@ -224,7 +247,7 @@ func (p *Processor) processFile(f MediaFile) (origin string, err error) {
 	}
 
 	// PASS 2: Stream the uncompressed data AGAIN to write it to disk
-	if err := p.writeFile(f, filepath.Join(destDir, baseName)); err != nil {
+	if err := p.writeFile(ctx, f, filepath.Join(destDir, baseName)); err != nil {
 		return "", err
 	}
 
@@ -241,7 +264,7 @@ func (p *Processor) processFile(f MediaFile) (origin string, err error) {
 // atomically (O_EXCL) so concurrent workers never overwrite each other, and the
 // data goes through a temp file so a failed copy never leaves a partial file
 // under its final name.
-func (p *Processor) writeFile(f MediaFile, basePath string) (err error) {
+func (p *Processor) writeFile(ctx context.Context, f MediaFile, basePath string) (err error) {
 	destPath, err := reserveDestPath(basePath)
 	if err != nil {
 		return err
@@ -268,7 +291,7 @@ func (p *Processor) writeFile(f MediaFile, basePath string) (err error) {
 	}
 	tmpPath = tmp.Name()
 
-	if _, err = io.Copy(tmp, rc); err != nil {
+	if _, err = io.Copy(tmp, &ctxReader{ctx: ctx, r: rc}); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -300,4 +323,17 @@ func reserveDestPath(basePath string) (string, error) {
 		}
 		out = fmt.Sprintf("%s_%d%s", name, counter, ext)
 	}
+}
+
+// ctxReader makes long copies abortable: reads fail with the context's error once it is cancelled.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c *ctxReader) Read(b []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(b)
 }
