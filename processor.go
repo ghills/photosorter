@@ -81,7 +81,7 @@ func (p *Processor) Run() error {
 			go func() {
 				defer wg.Done()
 				for mF := range taskCh {
-					origin, err := p.processFile(mF)
+					origin, err := p.safeProcessFile(mF)
 					if err != nil {
 						if p.Logger != nil {
 							p.Logger.Printf("Error processing %s: %v", mF.Name(), err)
@@ -141,6 +141,17 @@ func (p *Processor) Run() error {
 	fmt.Printf("Errors                   : %d\n", errorsCount)
 
 	return nil
+}
+
+// safeProcessFile converts a panic while handling one file into an error so a single
+// bad file can't take down the whole run.
+func (p *Processor) safeProcessFile(f MediaFile) (origin string, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	return p.processFile(f)
 }
 
 // processFile handles extracting a single file using a two-pass method to minimize disk writes.

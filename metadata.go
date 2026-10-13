@@ -170,7 +170,15 @@ func IsMP4Video(filename string) bool {
 	return false
 }
 
+// mvhdReadLimit bounds how much of an mvhd box we read. Versions 0 and 1 need 20 and 32
+// bytes respectively, so anything past that is never touched.
+const mvhdReadLimit = 32
+
+// maxMediaSeconds caps plausible durations (~68 years) so corrupt headers can't overflow time.Duration.
+const maxMediaSeconds = 1 << 31
+
 // GetMediaDuration reads the moov -> mvhd atom from an MP4/MOV file to determine its exact duration.
+// It tolerates corrupt or truncated input by returning an error rather than panicking.
 func GetMediaDuration(f MediaFile) (time.Duration, error) {
 	rc, err := f.Open()
 	if err != nil {
@@ -180,72 +188,119 @@ func GetMediaDuration(f MediaFile) (time.Duration, error) {
 
 	var header [8]byte
 	for {
-		_, err := io.ReadFull(rc, header[:])
-		if err != nil {
+		if _, err := io.ReadFull(rc, header[:]); err != nil {
 			return 0, err
 		}
-		
+
 		size := binary.BigEndian.Uint32(header[0:4])
 		boxType := string(header[4:8])
-		
+
 		var realSize int64
 		var headerLen int64 = 8
-		if size == 1 {
+		switch size {
+		case 0:
+			// Box extends to end of file. Only a moov box is worth descending into.
+			if boxType != "moov" {
+				return 0, fmt.Errorf("reached end of file box %q, moov not found", boxType)
+			}
+			continue
+		case 1:
 			var extSize [8]byte
 			if _, err := io.ReadFull(rc, extSize[:]); err != nil {
 				return 0, err
 			}
-			realSize = int64(binary.BigEndian.Uint64(extSize[:]))
+			realSize = int64(binary.BigEndian.Uint64(extSize[:])) // negative if the top bit is set
 			headerLen = 16
-		} else if size == 0 {
-			// Extends to end of file
-			return 0, fmt.Errorf("reached end of file box, moov not found")
-		} else {
+		default:
 			realSize = int64(size)
 		}
-		
+		if realSize < headerLen {
+			return 0, fmt.Errorf("invalid %q box size %d", boxType, realSize)
+		}
+
 		if boxType == "moov" {
 			continue // Check children
 		}
-		
+
+		bodySize := realSize - headerLen
+
 		if boxType == "mvhd" {
-			bodySize := realSize - headerLen
-			body := make([]byte, bodySize)
-			if _, err := io.ReadFull(rc, body); err != nil {
-				return 0, err
-			}
-			
-			version := body[0]
-			if version == 0 {
-				if len(body) < 20 {
-					return 0, fmt.Errorf("mvhd box too small")
-				}
-				timeScale := binary.BigEndian.Uint32(body[12:16])
-				duration := binary.BigEndian.Uint32(body[16:20])
-				if timeScale == 0 {
-					return 0, fmt.Errorf("invalid timescale 0")
-				}
-				return time.Duration(duration) * time.Second / time.Duration(timeScale), nil
-			} else if version == 1 {
-				if len(body) < 28 {
-					return 0, fmt.Errorf("mvhd box too small")
-				}
-				timeScale := binary.BigEndian.Uint32(body[20:24])
-				duration := binary.BigEndian.Uint64(body[24:32])
-				if timeScale == 0 {
-					return 0, fmt.Errorf("invalid timescale 0")
-				}
-				return time.Duration(duration) * time.Second / time.Duration(timeScale), nil
-			}
-			return 0, fmt.Errorf("unsupported mvhd version %d", version)
+			return parseMvhd(rc, bodySize)
 		}
-		
-		skipBytes := realSize - headerLen
-		if skipBytes > 0 {
-			_, err = io.CopyN(io.Discard, rc, skipBytes)
-			if err != nil {
-				return 0, err
-			}
+
+		if err := skipBytes(rc, bodySize); err != nil {
+			return 0, err
 		}
 	}
+}
+
+// parseMvhd decodes the duration from the start of an mvhd box body of bodySize bytes.
+func parseMvhd(r io.Reader, bodySize int64) (time.Duration, error) {
+	n := bodySize
+	if n > mvhdReadLimit {
+		n = mvhdReadLimit
+	}
+	body := make([]byte, n)
+	if _, err := io.ReadFull(r, body); err != nil {
+		return 0, err
+	}
+	if len(body) < 1 {
+		return 0, fmt.Errorf("mvhd box empty")
+	}
+
+	var timeScale uint32
+	var duration uint64
+	switch version := body[0]; version {
+	case 0:
+		if len(body) < 20 {
+			return 0, fmt.Errorf("mvhd box too small")
+		}
+		timeScale = binary.BigEndian.Uint32(body[12:16])
+		duration = uint64(binary.BigEndian.Uint32(body[16:20]))
+	case 1:
+		if len(body) < 32 {
+			return 0, fmt.Errorf("mvhd box too small")
+		}
+		timeScale = binary.BigEndian.Uint32(body[20:24])
+		duration = binary.BigEndian.Uint64(body[24:32])
+	default:
+		return 0, fmt.Errorf("unsupported mvhd version %d", version)
+	}
+	if timeScale == 0 {
+		return 0, fmt.Errorf("invalid timescale 0")
+	}
+
+	secs := duration / uint64(timeScale)
+	if secs > maxMediaSeconds {
+		return 0, fmt.Errorf("implausible duration: %d/%d", duration, timeScale)
+	}
+	rem := duration % uint64(timeScale)
+	return time.Duration(secs)*time.Second + time.Duration(rem)*time.Second/time.Duration(timeScale), nil
+}
+
+// skipBytes advances r by n bytes, seeking when the reader supports it (local files)
+// instead of reading and discarding. A skip past the end of the data is an error.
+func skipBytes(r io.Reader, n int64) error {
+	if n <= 0 {
+		return nil
+	}
+	if s, ok := r.(io.Seeker); ok {
+		cur, err := s.Seek(0, io.SeekCurrent)
+		if err == nil {
+			end, err := s.Seek(0, io.SeekEnd)
+			if err == nil {
+				if n > end-cur {
+					return io.ErrUnexpectedEOF
+				}
+				_, err = s.Seek(cur+n, io.SeekStart)
+				return err
+			}
+		}
+		return err
+	}
+	copied, err := io.CopyN(io.Discard, r, n)
+	if err == io.EOF && copied < n {
+		return io.ErrUnexpectedEOF
+	}
+	return err
 }

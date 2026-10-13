@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -251,4 +253,98 @@ func TestGetMediaDuration(t *testing.T) {
 	if duration != expected {
 		t.Errorf("Expected duration %v, got %v", expected, duration)
 	}
+}
+
+func mp4Box(boxType string, body []byte) []byte {
+	b := make([]byte, 8+len(body))
+	binary.BigEndian.PutUint32(b[0:4], uint32(len(b)))
+	copy(b[4:8], boxType)
+	copy(b[8:], body)
+	return b
+}
+
+func TestGetMediaDuration_Hardening(t *testing.T) {
+	mvhdV1 := make([]byte, 32)
+	mvhdV1[0] = 1
+	binary.BigEndian.PutUint32(mvhdV1[20:24], 1000)
+	binary.BigEndian.PutUint64(mvhdV1[24:32], 5500)
+
+	mvhdV1Huge := make([]byte, 32)
+	mvhdV1Huge[0] = 1
+	binary.BigEndian.PutUint32(mvhdV1Huge[20:24], 1)
+	binary.BigEndian.PutUint64(mvhdV1Huge[24:32], 1<<62)
+
+	hdr := func(size uint32, boxType string) []byte {
+		b := make([]byte, 8)
+		binary.BigEndian.PutUint32(b[0:4], size)
+		copy(b[4:8], boxType)
+		return b
+	}
+	ext := func(size uint64, boxType string) []byte {
+		b := hdr(1, boxType)
+		e := make([]byte, 8)
+		binary.BigEndian.PutUint64(e, size)
+		return append(b, e...)
+	}
+
+	tests := []struct {
+		name    string
+		content []byte
+		want    time.Duration
+		wantErr bool
+	}{
+		{"v1 mvhd", mp4Box("moov", mp4Box("mvhd", mvhdV1)), 5500 * time.Millisecond, false},
+		{"v1 mvhd too short for duration", mp4Box("moov", mp4Box("mvhd", mvhdV1[:28])), 0, true},
+		{"v1 implausible duration", mp4Box("moov", mp4Box("mvhd", mvhdV1Huge)), 0, true},
+		{"empty mvhd body", mp4Box("moov", mp4Box("mvhd", nil)), 0, true},
+		{"box size smaller than header", append(hdr(4, "free"), make([]byte, 16)...), 0, true},
+		{"extended size smaller than header", ext(3, "free"), 0, true},
+		{"extended size has top bit set", ext(1<<63, "free"), 0, true},
+		{"mvhd claims huge size", append(hdr(0xFFFFFFF0, "mvhd"), make([]byte, 40)...), 0, true},
+		{"skip past end of data", append(hdr(0xFFFFFFF0, "free"), make([]byte, 16)...), 0, true},
+		{"unbounded non-moov box", hdr(0, "mdat"), 0, true},
+		{"unbounded moov box", append(hdr(0, "moov"), mp4Box("mvhd", mvhdV1)...), 5500 * time.Millisecond, false},
+		{"truncated", mp4Box("moov", nil)[:6], 0, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := GetMediaDuration(&mockMedia{content: tc.content})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Errorf("duration = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGetMediaDuration_SeekableSkip(t *testing.T) {
+	mvhd := make([]byte, 20)
+	binary.BigEndian.PutUint32(mvhd[12:16], 1000)
+	binary.BigEndian.PutUint32(mvhd[16:20], 2000)
+	content := append(mp4Box("mdat", make([]byte, 4096)), mp4Box("moov", mp4Box("mvhd", mvhd))...)
+
+	path := filepath.Join(t.TempDir(), "v.mp4")
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := GetMediaDuration(&LocalMediaFile{path: path})
+	if err != nil || got != 2*time.Second {
+		t.Errorf("got %v, %v; want 2s", got, err)
+	}
+
+	// mdat claiming to extend past EOF on a real file must error, not hang or succeed.
+	bad := append(hdr32(0xFFFFFFF0, "mdat"), make([]byte, 16)...)
+	os.WriteFile(path, bad, 0644)
+	if _, err := GetMediaDuration(&LocalMediaFile{path: path}); err == nil {
+		t.Error("expected error for box extending past EOF")
+	}
+}
+
+func hdr32(size uint32, boxType string) []byte {
+	b := make([]byte, 8)
+	binary.BigEndian.PutUint32(b[0:4], size)
+	copy(b[4:8], boxType)
+	return b
 }
