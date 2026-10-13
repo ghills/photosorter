@@ -54,7 +54,7 @@ func TestProcessor_ConcurrentSameNameAndDuplicates(t *testing.T) {
 	zw.Close()
 	zf.Close()
 
-	src, err := NewZipSource(zipPath)
+	src, err := NewZipSource(zipPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +128,7 @@ func TestProcessor_ProcessDuplicateAndNew(t *testing.T) {
 
 	// 3. Run processor
 	outDir := filepath.Join(tempDir, "out")
-	src, err := NewZipSource(zipPath)
+	src, err := NewZipSource(zipPath, nil)
 	if err != nil {
 		t.Fatalf("Error creating ZipSource: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestProcessor_RunStopsOnCancelledContext(t *testing.T) {
 	}
 	zw.Close()
 	zf.Close()
-	src, err := NewZipSource(zipPath)
+	src, err := NewZipSource(zipPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestProcessor_RunReportsDatabaseFailure(t *testing.T) {
 	w.Write([]byte("content"))
 	zw.Close()
 	zf.Close()
-	src, _ := NewZipSource(zipPath)
+	src, _ := NewZipSource(zipPath, nil)
 
 	err = NewProcessor([]InputSource{src}, outDir, db, 1, 0, false, nil).Run(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "disk full") {

@@ -70,15 +70,7 @@ func FindCaptureDate(f MediaFile) (time.Time, string) {
 	}
 
 	// Second: fallback to JSON sidecar metadata
-	base := strings.TrimSuffix(f.Name(), filepath.Ext(f.Name()))
-	jsonFilesToTry := []string{
-		f.Name() + ".json",
-		f.Name() + ".supplemental-metadata.json",
-		base + ".json",
-		base + ".supplemental-metadata.json",
-	}
-
-	if jrc, ok := f.OpenSidecar(jsonFilesToTry); ok {
+	if jrc, ok := f.OpenSidecar(); ok {
 		var metadata GooglePhotoMetadata
 		err := json.NewDecoder(jrc).Decode(&metadata)
 		jrc.Close()

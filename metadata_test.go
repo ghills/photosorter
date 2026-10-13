@@ -126,12 +126,13 @@ func TestFindCaptureDate_JSONFallback(t *testing.T) {
 		t.Fatalf("Failed to open zip reader: %v", err)
 	}
 
-	zipIndex := make(map[string]*zip.File)
+	idx := NewSidecarIndex()
 	var mediaFile *zip.File
 	for _, f := range r.File {
-		zipIndex[f.Name] = f
 		if f.Name == "test.mp4" {
 			mediaFile = f
+		} else if isSidecarFile(f.Name) {
+			idx.Add(f.Name, f.Open)
 		}
 	}
 
@@ -141,7 +142,7 @@ func TestFindCaptureDate_JSONFallback(t *testing.T) {
 
 	zmf := &ZipMediaFile{
 		f:        mediaFile,
-		zipIndex: zipIndex,
+		sidecars: idx,
 	}
 
 	captureDate, origin := FindCaptureDate(zmf)
@@ -207,7 +208,7 @@ func (m *mockMedia) Name() string { return "test.mp4" }
 func (m *mockMedia) Open() (io.ReadCloser, error) {
 	return io.NopCloser(bytes.NewReader(m.content)), nil
 }
-func (m *mockMedia) OpenSidecar(names []string) (io.ReadCloser, bool) {
+func (m *mockMedia) OpenSidecar() (io.ReadCloser, bool) {
 	return nil, false
 }
 

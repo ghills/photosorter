@@ -11,7 +11,7 @@ Instead of dealing with directories containing JSON sidecars, duplicate images, 
 - **Multiple Input Sources**: Processes files directly from Takeout zip archives without requiring manual extraction to disk, or processes standard media folders on your local filesystem.
 - **Date Detection Fallbacks**: Determines the capture date of media using a fallback strategy:
   1. **EXIF Metadata**: Reads EXIF headers directly from the zip stream, reading only the first 256KB of the file.
-  2. **JSON Sidecars**: Parses Google Photos metadata sidecar files (`.json`) for `photoTakenTime` or `creationTime` timestamps if EXIF is not found.
+  2. **JSON Sidecars**: Parses Google Photos metadata sidecar files (`.json`) for `photoTakenTime` or `creationTime` timestamps if EXIF is not found. Matching understands Takeout's naming quirks: `.supplemental-metadata.json`, names truncated to fit Takeout's length limit, duplicate counters (`IMG_1(1).jpg` → `IMG_1.jpg(1).json`), `-edited` copies, and sidecars stored in a different zip part than their media.
   3. **Filename Parsing**: Extracts dates via regex from common camera filename patterns (e.g., `IMG_20230514_...`).
 - **Deduplication**: Uses a persistent SQLite database (`.photosorter_cache.db`) and `xxhash` to detect and skip duplicates to minimize disk writes. The database is optimized with WAL mode and prepared statements for better performance.
 - **Smart Library Synchronization**: Can gracefully reconcile with an existing output folder that contains organized media by hashing existing files before processing a new Takeout zip.

@@ -48,6 +48,8 @@ func run() int {
 	}
 
 	var sources []InputSource
+	// Shared so a sidecar in one zip part can describe media in another.
+	sidecars := NewSidecarIndex()
 
 	if *inFlag != "" {
 		_, err := os.Stat(*inFlag)
@@ -55,7 +57,7 @@ func run() int {
 			fmt.Printf("Input directory does not exist or cannot be accessed: %s\n", *inFlag)
 			return 1
 		}
-		sources = append(sources, NewLocalFolderSource(*inFlag))
+		sources = append(sources, NewLocalFolderSource(*inFlag, sidecars))
 	}
 
 	if *zipFlag != "" {
@@ -66,7 +68,7 @@ func run() int {
 				return 1
 			}
 			for _, m := range matches {
-				src, err := NewZipSource(m)
+				src, err := NewZipSource(m, sidecars)
 				if err != nil {
 					fmt.Printf("Failed to open zip source %s: %v\n", m, err)
 					return 1
@@ -74,7 +76,7 @@ func run() int {
 				sources = append(sources, src)
 			}
 		} else {
-			src, err := NewZipSource(*zipFlag)
+			src, err := NewZipSource(*zipFlag, sidecars)
 			if err != nil {
 				fmt.Printf("Input zip file does not exist or is invalid: %s\n", *zipFlag)
 				return 1

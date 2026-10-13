@@ -68,12 +68,10 @@ func (p *Processor) Run(ctx context.Context) error {
 				p.Logger.Printf("Failed to scan source %s: %v", src.Name(), err)
 			}
 			fmt.Printf("Failed to scan source %s: %v\n", src.Name(), err)
-			src.Close()
 			continue
 		}
 
 		if len(mediaFiles) == 0 {
-			src.Close()
 			continue
 		}
 
@@ -138,7 +136,6 @@ func (p *Processor) Run(ctx context.Context) error {
 			}()
 		}
 		wg.Wait()
-		src.Close()
 	}
 
 	totalOrganized := countExif + countJsonTaken + countJsonCreation + countFilename + countUnknown
