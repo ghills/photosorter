@@ -1,30 +1,15 @@
 # PhotoSorter
 
-A CLI tool for organizing Google Photos Takeout archives.
+PhotoSorter imports [Google Takeout](https://takeout.google.com/) exports of Google Photos into a plain folder-based photo library on your own disk.
 
-PhotoSorter is a Go application designed to extract, deduplicate, and chronologically organize media files from Google Photos Takeout `.zip` archives. 
+- **No duplicates.** Every file in the library is identified by a hash of its content. Anything already in the library is skipped, whether it was imported before, came from an earlier Takeout, or was put there by hand.
+- **Correct dates.** Each file goes into a dated folder based on its EXIF data, Google's JSON sidecar files, or failing those, the date in its file name. Google often strips EXIF from exported media, so the sidecars matter.
+- **Albums kept.** Media from your Google Photos albums can stay grouped as albums.
+- **Works on the zips directly.** No need to extract multi-gigabyte archives first. Extracted folders work too.
 
-Instead of dealing with directories containing JSON sidecars, duplicate images, and disorganized files, PhotoSorter processes data directly from the Takeout archive and organizes it chronologically into folders.
+## Quick start
 
-## Features
-
-- **Multiple Input Sources**: Processes files directly from Takeout zip archives without requiring manual extraction to disk, or processes standard media folders on your local filesystem.
-- **Date Detection Fallbacks**: Determines the capture date of media using a fallback strategy:
-  1. **EXIF Metadata**: Reads EXIF headers directly from the zip stream, reading only the first 256KB of the file.
-  2. **JSON Sidecars**: Parses Google Photos metadata sidecar files (`.json`) for `photoTakenTime` or `creationTime` timestamps if EXIF is not found. Matching understands Takeout's naming quirks: `.supplemental-metadata.json`, names truncated to fit Takeout's length limit, duplicate counters (`IMG_1(1).jpg` → `IMG_1.jpg(1).json`), `-edited` copies, and sidecars stored in a different zip part than their media.
-  3. **Filename Parsing**: Extracts dates via regex from common camera filename patterns (e.g., `IMG_20230514_...`).
-- **Deduplication**: Uses a persistent SQLite database (`.photosorter_cache.db`) and `xxhash` to detect and skip duplicates to minimize disk writes. The database is optimized with WAL mode and prepared statements for better performance.
-- **Smart Library Synchronization**: Can gracefully reconcile with an existing output folder that contains organized media by hashing existing files before processing a new Takeout zip, using the same worker pool as the import.
-- **Chronological Output**: Routes files into `YYYY-MM-DD` folders (e.g., `2023-05-14/`). Files lacking detectable dates are placed in an `Unknown_Date/` folder.
-- **Album Preservation**: Detects Google Photos Album organization within the Takeout zip and preserves it by routing those files to an `Albums/<Album Name>/` directory instead of generic date folders.
-- **Concurrent Processing**: Configurable goroutine worker pool (`-workers`) for rapid multi-threaded file hashing and extraction.
-- **Dry-Run Mode**: Safely test an extraction pass with `-dry-run` to view what actions would be taken without writing files to disk.
-- **Broad Media Support**: Supports common image and video formats. Automatically ignores macOS hidden system files and resource forks.
-- **Progress Reporting & Logging**: Provides a terminal progress bar, a final summary report, and outputs detailed logs to a file (`photosorter_*.log`) alongside the database.
-
-## Installation
-
-Ensure you have [Go](https://go.dev/) installed.
+Requires [Go](https://go.dev/) 1.23 or newer.
 
 ```bash
 git clone https://github.com/ghills/photosorter.git
@@ -32,76 +17,180 @@ cd photosorter
 go build -o photosorter .
 ```
 
-## Usage
-
-Provide the path to your Takeout Zip (or a local media directory) and the destination folder. You can use glob patterns to process multiple zip files sequentially:
+Import every part of a Takeout export into `~/Pictures/Library`:
 
 ```bash
-./photosorter -zip "takeout-*.zip" -out <destination_folder>
+./photosorter -out ~/Pictures/Library ~/Downloads/takeout-*.zip
 ```
 
-Alternatively, to process a local directory of media files instead of a zip file:
+See what would happen first, without writing anything:
 
 ```bash
-./photosorter -in /path/to/my/media -out <destination_folder>
+./photosorter -out ~/Pictures/Library -dry-run ~/Downloads/takeout-*.zip
 ```
 
-### Advanced Flags
+Pass every part of a multi-part export in the same run. A sidecar sometimes ends up in a different zip from the photo it describes, and PhotoSorter can only pair them when it sees both.
 
-- `-in <path>`: Process an existing folder on your local filesystem instead of a zip file.
+## The resulting library
 
-- `-workers <number>`: Number of concurrent workers for processing (default 8).
-- `-dry-run`: Run a simulation of extraction without writing any files or database records. Duplicates within the run are still detected.
-- `-tz <name>`: IANA timezone (e.g. `America/New_York`) used to turn capture timestamps into `YYYY-MM-DD` folders. Defaults to this machine's timezone. Set it when running somewhere other than where the photos were taken (a server or container in UTC, for example), so photos taken in the evening don't land in the next day's folder.
-- `-nosync`: Prevent automatic library sync from running.
-- `-max-buffer-mb <MB>`: Files up to this size (default 16) are read into memory once and reused for hashing, date detection and the copy, instead of being re-read from the source (or re-decompressed from the zip) at each step. Larger files are streamed. Peak memory is roughly `-workers` × this value; set it to `0` to disable buffering on very constrained machines.
-- `-skip-short-videos <seconds>`: Skip importing `mp4` and `mov` videos shorter than or equal to this duration (default 3). This is useful for ignoring small 1-2s "motion photos" without importing them as standalone videos.
+With the default settings:
 
-### Exit Codes
+```
+Library/
+├── 2023-05-14/                IMG_1234.jpg, VID_5678.mp4, ...
+├── 2023-05-15/
+├── Albums/
+│   └── Hawaii Trip/           media from a Google Photos album
+├── Unknown_Date/              files whose date could not be determined
+├── .photosorter_cache.db      hash database (see "Duplicate detection")
+└── photosorter_20231012_120000.log   per-run detail log
+```
+
+If a name is already taken in the destination folder, the new file gets a suffix (`IMG_1234_1.jpg`). Existing files are never overwritten. The folder names and the album behaviour are configurable (see [Configuration](#configuration)).
+
+## How dates are found
+
+For each file, PhotoSorter uses the first of these that works:
+
+1. **EXIF**: `DateTimeOriginal` from JPEG, HEIC and TIFF headers. Only the first 256 KB is read.
+2. **JSON sidecar `photoTakenTime`**: the capture time Google recorded.
+3. **JSON sidecar `creationTime`**: the upload time. This is a last resort before guessing.
+4. **File name**: patterns such as `IMG_20230514_…`, `VID-2023-05-14…`, `Screenshot_2023-05-14…` and `WhatsApp Image 2023-05-14…`.
+
+If none of them works, the file goes to `Unknown_Date/`.
+
+Sidecar timestamps are absolute instants, so the day they fall on depends on the time zone. PhotoSorter uses the machine's zone unless you pass `-tz`. EXIF times are wall-clock times and are used exactly as recorded.
+
+### Sidecar matching
+
+Takeout is inconsistent about naming sidecars. For `IMG_1234.jpg`, PhotoSorter looks for each of these:
+
+| Sidecar name | Why it exists |
+| --- | --- |
+| `IMG_1234.jpg.json` | Older exports |
+| `IMG_1234.jpg.supplemental-metadata.json` | Newer exports |
+| `IMG_1234.json` | Named after the stem |
+| `IMG_1234.jpg.supplem.json` | Truncated to Takeout's 51-character limit |
+| `IMG_1234.jpg(1).json` | Describes the duplicate `IMG_1234(1).jpg`; the counter moves to the end |
+
+Edited copies (`IMG_1234-edited.jpg`, plus the German, French, Italian and Spanish variants) use the original's sidecar when they have none of their own. Sidecars are matched across every zip in the run.
+
+## Duplicate detection
+
+PhotoSorter hashes each file's bytes with [xxHash](https://github.com/cespare/xxhash). It then checks the hash against `.photosorter_cache.db`, an SQLite database at the library root. Duplicates are detected before anything is written, so they cost no disk writes.
+
+The database only knows about files PhotoSorter imported. If you add files to the library some other way, run a **sync** so PhotoSorter hashes everything already there:
+
+```bash
+./photosorter -out ~/Pictures/Library -sync
+```
+
+A sync also runs on its own when the library contains media but the database is empty, for example on the first run against an existing library. If the library has more files than the database tracks, PhotoSorter warns you. Pass `-no-sync` to turn off the automatic sync.
+
+## Command-line reference
+
+```
+photosorter -out <library> [flags] [takeout.zip | folder ...]
+```
+
+Positional arguments are inputs: folders are imported like `-in`, and anything else like `-zip`.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-out <folder>` | *(required)* | Library folder to import into |
+| `-in <folder>` | | Import from a folder, such as an extracted Takeout. Repeatable |
+| `-zip <file or glob>` | | Import from a Takeout zip, e.g. `"takeout-*.zip"`. Repeatable |
+| `-config <file>` | `<out>/photosorter.toml` | Load settings from this TOML file |
+| `-sync` | off | Hash the existing library before importing |
+| `-no-sync` | off | Never sync automatically (`-nosync` is still accepted) |
+| `-dry-run` | off | Go through the import without writing files or database records |
+| `-workers <n>` | 8 | Files processed concurrently |
+| `-max-buffer-mb <MB>` | 16 | Files up to this size are read once and kept in memory for hashing, dating and copying. 0 disables this. Peak memory is about `workers × MB` |
+| `-tz <zone>` | machine's zone | IANA zone, e.g. `America/New_York`, used to date sidecar timestamps |
+| `-skip-short-videos <s>` | 3 | Skip MP4/MOV videos this many seconds long or shorter, such as motion-photo clips. 0 imports all videos |
+| `-date-format <layout>` | `2006-01-02` | Go time layout for dated folders. Slashes nest: `2006/01` → `2023/05/` |
+| `-unknown-dir <folder>` | `Unknown_Date` | Folder for undated files |
+| `-albums folder\|ignore` | `folder` | Keep albums together, or file their media by date |
+| `-albums-dir <folder>` | `Albums` | Parent folder for albums |
+| `-include-ext <list>` | | Extra extensions to import, e.g. `dng,arw` |
+| `-exclude-ext <list>` | | Extensions to skip, e.g. `gif` |
+
+The built-in extensions are `jpg jpeg png gif webp heic bmp tiff tif mp4 mov avi mkv webm mts 3gp m4v`. macOS metadata (`._*` files, `__MACOSX/` folders) is always ignored. The input folder and the library must not contain one another.
+
+### Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Everything was processed |
-| `1` | A fatal error, or the run finished but some files could not be processed (see the log) |
-| `130` | Interrupted with Ctrl-C or SIGTERM. Finished files were recorded, so re-run to continue |
+| `1` | A fatal error, or some files could not be imported (see the log) |
+| `130` | Interrupted by Ctrl-C or SIGTERM. Finished files were recorded, so run again to continue. A second Ctrl-C exits immediately |
 
-`-in` and `-out` must not contain one another; PhotoSorter refuses to start if they do.
+## Configuration
 
-### Syncing an Existing Library
+Every flag can also be set in a TOML file. Put it in the library as `photosorter.toml` to have it picked up automatically, or point to it with `-config`. Settings resolve in this order, with later ones winning:
 
-If you already have a folder organized with photos and videos, you can synchronize its contents with the database using the `-sync` flag. This prevents duplicates if you process a new Takeout zip containing overlap:
+**built-in defaults → config file → flags given on the command line**
 
-```bash
-./photosorter -out <destination_folder> -sync
+```toml
+tz = "Europe/London"
+
+[layout]
+date_format = "2006/01"      # 2023/05/
+unknown_dir = "Undated"
+albums = "ignore"
+
+[media]
+include_ext = ["dng"]
+exclude_ext = ["gif"]
 ```
 
-*(Note: If you run the standard zip processing command, PhotoSorter will automatically run a sync check if it detects more physical media files in the destination than are recorded in the database. You can disable this automatic check by passing the `-nosync` flag.)*
+[`photosorter.example.toml`](photosorter.example.toml) documents every key. Unknown keys are reported as errors, so typos don't get silently ignored.
 
-### Example
+## How it works
 
-Organize an exported Takeout archive into a `MyPhotos` directory:
-
-```bash
-./photosorter -zip takeout-20231012T000000Z-001.zip -out ./MyPhotos
+```
+ inputs ──► source ──────────► importer ─────────────────────────────► library
+ (zip /     enumerate media,   per file, in parallel:                  dated / album
+  folder)   index sidecars     1 hash (small files kept in memory)     folders
+                               2 claim hash in DB ── duplicate? skip
+                               3 skip short videos (optional)
+                               4 date: EXIF → sidecar → file name
+                               5 choose folder (layout)
+                               6 copy via temp file, record hash
 ```
 
-## How It Works
+Copies are written to a temporary file and renamed into place, so an interrupted run never leaves a half-written photo. Hashes are committed to the database in batches by a background writer. If the database stops accepting writes, the run stops, because otherwise files would be imported but not remembered.
 
-PhotoSorter processes the archive in two parts to reduce disk IO operations:
-- **Pass 1 (Hash Verification)**: The tool reads the target file from the source to compute its `xxhash`. Files up to `-max-buffer-mb` are held in memory while this happens. It verifies the hash against the SQLite database. If the file is a duplicate, no disk extraction occurs.
-- **Pass 2 (Extraction)**: If the file is unique, it is written to its proper chronological destination path, from memory for buffered files, or by reading the source stream again for larger ones. Date detection (EXIF) uses the same in-memory copy.
-
-## Development and Testing
-
-The project includes thoroughly written unit tests covering database operations, metadata parsing, and file processing logic. You can run the test suite using standard Go commands:
+## Development
 
 ```bash
-go test ./...
+go test -race ./...    # all tests, including an end-to-end run on a synthetic Takeout
+go vet ./...
+gofmt -l .             # should print nothing
 ```
 
-## Core Dependencies
+CI runs these steps plus [staticcheck](https://staticcheck.dev/) on Linux and macOS.
 
-- [cespare/xxhash](https://github.com/cespare/xxhash) - Hashing
-- [schollz/progressbar](https://github.com/schollz/progressbar) - Terminal progress interface
-- [rwcarlsen/goexif](https://github.com/rwcarlsen/goexif) - EXIF header extraction
-- [glebarez/go-sqlite](https://github.com/glebarez/go-sqlite) - CGO-Free SQLite database driver
+### Project layout
+
+| Path | Responsibility |
+| --- | --- |
+| [`main.go`](main.go) | Entry point: signal handling, then `cli.Run` |
+| [`internal/cli`](internal/cli) | Flag parsing, config loading, orchestrating a run, exit codes, log file |
+| [`internal/config`](internal/config) | The `Config` struct, defaults, TOML loading, validation |
+| [`internal/source`](internal/source) | Zip and folder inputs, behind the `Source`/`File` interfaces |
+| [`internal/takeout`](internal/takeout) | Takeout specifics: sidecar matching, sidecar JSON, album folders |
+| [`internal/media`](internal/media) | Media file types, EXIF and file-name dates, MP4 duration |
+| [`internal/library`](internal/library) | The hash database, content hashing, library sync |
+| [`internal/importer`](internal/importer) | The per-file import pipeline, folder layout, atomic writes, run report |
+| [`internal/parallel`](internal/parallel) | Shared worker pool with a progress bar |
+
+Each package has a doc comment that explains its role in more detail (`go doc ./internal/importer`).
+
+## Dependencies
+
+- [cespare/xxhash](https://github.com/cespare/xxhash): content hashing
+- [glebarez/go-sqlite](https://github.com/glebarez/go-sqlite): pure-Go SQLite driver (no cgo)
+- [rwcarlsen/goexif](https://github.com/rwcarlsen/goexif): EXIF decoding
+- [BurntSushi/toml](https://github.com/BurntSushi/toml): config file parsing
+- [schollz/progressbar](https://github.com/schollz/progressbar): terminal progress bars

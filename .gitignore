@@ -40,18 +40,19 @@ ehthumbs.db
 *~
 
 # Project Specific
-photosorter
+/photosorter
+.bin/
 out/
 .photosorter_cache.db
+photosorter.toml
 
 # Database logs / temp files
 *.db
 *.sqlite
 *.sqlite3
 
-# Ignore generic large input archives (except the dummy test zip)
+# Takeout archives
 *.zip
-!test_env/dummy.zip
 
 # Application Logs
 *.log
