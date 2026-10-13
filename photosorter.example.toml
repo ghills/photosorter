@@ -1,0 +1,67 @@
+# PhotoSorter configuration
+#
+# Copy this file to "photosorter.toml" inside your library folder and it will be
+# picked up automatically, or pass any path with -config. Every key is optional:
+# anything left out keeps its default (shown below). Command-line flags override
+# values set here. Relative paths are relative to this file's folder.
+
+# Library folder to import into (-out). Usually given on the command line instead.
+# out = "/Users/me/Pictures/Library"
+
+# Inputs (-in / -zip). Zip entries may be glob patterns.
+# in  = ["/Users/me/Downloads/Takeout"]
+# zip = ["/Users/me/Downloads/takeout-*.zip"]
+
+# Hash every file already in the library before importing (-sync).
+# sync = false
+
+# Never sync the library automatically (-no-sync). Normally PhotoSorter syncs on its
+# own when the library has files but the database is empty.
+# no_sync = false
+
+# Show what would happen without writing anything (-dry-run).
+# dry_run = false
+
+# Number of files processed at once (-workers).
+# workers = 8
+
+# Files up to this many MB are read into memory once and reused for hashing, date
+# detection and copying (-max-buffer-mb). 0 disables. Peak memory ≈ workers × this.
+# max_buffer_mb = 16
+
+# IANA time zone used to turn Google's timestamps into dates (-tz). Defaults to this
+# machine's zone. Set it if you import on a machine in a different zone from where
+# the photos were taken, so evening photos don't land in the next day's folder.
+# tz = "America/New_York"
+
+# Skip MP4/MOV videos this many seconds long or shorter, such as the clips behind
+# motion photos (-skip-short-videos). 0 imports every video.
+# skip_short_videos = 3
+
+[layout]
+# Folder for dated files, as a Go time layout using the reference date
+# 2006-01-02 15:04:05 (-date-format). Slashes create nested folders:
+#   "2006-01-02"   -> 2023-05-14/
+#   "2006/01"      -> 2023/05/
+#   "2006/2006-01" -> 2023/2023-05/
+#   "2006/Jan"     -> 2023/May/
+# date_format = "2006-01-02"
+
+# Folder for files whose date can't be determined (-unknown-dir).
+# unknown_dir = "Unknown_Date"
+
+# What to do with media from Google Photos albums (-albums):
+#   "folder": keep albums together under albums_dir/<album name>/
+#   "ignore": file album media by date like everything else
+# albums = "folder"
+
+# Parent folder for albums (-albums-dir).
+# albums_dir = "Albums"
+
+[media]
+# Extra file extensions to import, on top of the built-in list (-include-ext).
+# Built in: jpg jpeg png gif webp heic bmp tiff tif mp4 mov avi mkv webm mts 3gp m4v
+# include_ext = ["dng", "arw"]
+
+# Extensions never to import (-exclude-ext).
+# exclude_ext = ["gif"]

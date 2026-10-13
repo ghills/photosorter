@@ -1,0 +1,230 @@
+package cli
+
+import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+)
+
+func writeZip(t *testing.T, path string, files map[string]string) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	for name, content := range files {
+		w, _ := zw.Create(name)
+		w.Write([]byte(content))
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// runCLI runs the command and returns its exit code and combined output.
+func runCLI(t *testing.T, args ...string) (int, string) {
+	t.Helper()
+	var out bytes.Buffer
+	code := Run(context.Background(), args, &out, &out)
+	return code, out.String()
+}
+
+// mediaIn lists library files as slash paths, ignoring PhotoSorter's own files.
+func mediaIn(t *testing.T, lib string) []string {
+	t.Helper()
+	var files []string
+	filepath.WalkDir(lib, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		name := d.Name()
+		if strings.HasPrefix(name, ".photosorter") || strings.HasPrefix(name, "photosorter") {
+			return nil
+		}
+		rel, _ := filepath.Rel(lib, p)
+		files = append(files, filepath.ToSlash(rel))
+		return nil
+	})
+	sort.Strings(files)
+	return files
+}
+
+const (
+	photos = "Takeout/Google Photos/"
+	year   = photos + "Photos from 2023/"
+)
+
+// sidecar returns Takeout JSON whose photoTakenTime is the given Unix time.
+func sidecar(unix string) string {
+	return `{"title":"x","photoTakenTime":{"timestamp":"` + unix + `","formatted":"..."}}`
+}
+
+// takeoutFixture writes a Takeout zip that exercises sidecar matching, albums,
+// undated files, edited copies, and content already in the library.
+func takeoutFixture(t *testing.T, dir string) string {
+	// Long enough that Takeout truncates its sidecar name to 46 characters + ".json".
+	const long = "a_very_long_file_name_without_any_date_here.jpg"
+	truncated := (long + ".supplemental-metadata")[:46] + ".json"
+
+	path := filepath.Join(dir, "takeout-001.zip")
+	writeZip(t, path, map[string]string{
+		year + "IMG_0001.jpg":                            "photo one",
+		year + "IMG_0001.jpg.supplemental-metadata.json": sidecar("1677931200"), // 2023-03-04 12:00 UTC
+		year + long:                   "long name",
+		year + truncated:              sidecar("1683806400"), // 2023-05-11 12:00 UTC
+		year + "IMG_0002.jpg":         "original",
+		year + "IMG_0002.jpg.json":    sidecar("1657281600"), // 2022-07-08 12:00 UTC
+		year + "IMG_0002-edited.jpg":  "edited",
+		year + "mystery.png":          "no date anywhere",
+		year + "copy_of_existing.jpg": "already have",
+		photos + "Hawaii/beach.jpg":   "beach",
+		photos + "Hawaii/beach.jpg.supplemental-metadata.json": sidecar("1677931200"),
+		"Takeout/archive_browser.html":                         "<html>",
+	})
+	return path
+}
+
+func TestRun_EndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	zipPath := takeoutFixture(t, dir)
+	lib := filepath.Join(dir, "Library")
+	writeFile(t, filepath.Join(lib, "old", "existing.jpg"), "already have")
+
+	code, out := runCLI(t, "-out", lib, "-tz", "UTC", zipPath)
+	if code != ExitOK {
+		t.Fatalf("exit code %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "syncing the library first") {
+		t.Errorf("expected an automatic sync of the existing library:\n%s", out)
+	}
+
+	want := []string{
+		"2022-07-08/IMG_0002-edited.jpg", // edited copy dated by the original's sidecar
+		"2022-07-08/IMG_0002.jpg",
+		"2023-03-04/IMG_0001.jpg",                                    // supplemental-metadata sidecar
+		"2023-05-11/a_very_long_file_name_without_any_date_here.jpg", // truncated sidecar
+		"Albums/Hawaii/beach.jpg",
+		"Unknown_Date/mystery.png",
+		"old/existing.jpg", // pre-existing; its copy in the zip was skipped
+	}
+	if got := mediaIn(t, lib); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("library contents:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+
+	// Importing the same archive again adds nothing.
+	code, out = runCLI(t, "-out", lib, "-tz", "UTC", zipPath)
+	if code != ExitOK || !strings.Contains(out, "Duplicates skipped          : 7") {
+		t.Errorf("second run: exit %d\n%s", code, out)
+	}
+	if got := mediaIn(t, lib); len(got) != len(want) {
+		t.Errorf("second run changed the library: %v", got)
+	}
+}
+
+func TestRun_ConfigFileLayoutAndFilter(t *testing.T) {
+	dir := t.TempDir()
+	zipPath := takeoutFixture(t, dir)
+	lib := filepath.Join(dir, "Library")
+	writeFile(t, filepath.Join(lib, "photosorter.toml"), `
+tz = "UTC"
+[layout]
+date_format = "2006/01"
+albums = "ignore"
+unknown_dir = "Undated"
+[media]
+exclude_ext = ["png"]
+`)
+
+	// The -date-format flag overrides the file; everything else comes from it.
+	code, out := runCLI(t, "-out", lib, "-date-format", "2006/2006-01", zipPath)
+	if code != ExitOK {
+		t.Fatalf("exit code %d\n%s", code, out)
+	}
+	want := []string{
+		"2022/2022-07/IMG_0002-edited.jpg",
+		"2022/2022-07/IMG_0002.jpg",
+		"2023/2023-03/IMG_0001.jpg",
+		"2023/2023-03/beach.jpg", // albums ignored
+		"2023/2023-05/a_very_long_file_name_without_any_date_here.jpg",
+		"Undated/copy_of_existing.jpg",
+		// mystery.png excluded by the extension filter
+	}
+	if got := mediaIn(t, lib); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("library contents:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestRun_DryRunWritesNoMedia(t *testing.T) {
+	dir := t.TempDir()
+	lib := filepath.Join(dir, "Library")
+	code, out := runCLI(t, "-out", lib, "-dry-run", takeoutFixture(t, dir))
+	if code != ExitOK || !strings.Contains(out, "DRY RUN") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if got := mediaIn(t, lib); len(got) != 0 {
+		t.Errorf("dry run wrote %v", got)
+	}
+}
+
+func TestRun_SyncOnly(t *testing.T) {
+	lib := t.TempDir()
+	writeFile(t, filepath.Join(lib, "2020-01-01", "a.jpg"), "a")
+	code, out := runCLI(t, "-out", lib, "-sync")
+	if code != ExitOK || !strings.Contains(out, "Sync complete: 1 files hashed") {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
+func TestRun_ExitCodes(t *testing.T) {
+	dir := t.TempDir()
+	if code, _ := runCLI(t, "-h"); code != ExitOK {
+		t.Errorf("-h exit = %d", code)
+	}
+	if code, out := runCLI(t, "-bogus"); code != ExitFailure || !strings.Contains(out, "photosorter -h") {
+		t.Errorf("bad flag exit = %d\n%s", code, out)
+	}
+	os.MkdirAll(filepath.Join(dir, "in"), 0755)
+	if code, out := runCLI(t, "-out", filepath.Join(dir, "in", "lib"), "-in", filepath.Join(dir, "in")); code != ExitFailure || !strings.Contains(out, "must not contain") {
+		t.Errorf("overlap exit = %d\n%s", code, out)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var buf bytes.Buffer
+	zipPath := takeoutFixture(t, dir)
+	if code := Run(ctx, []string{"-out", filepath.Join(dir, "lib"), zipPath}, &buf, &buf); code != ExitInterrupted {
+		t.Errorf("cancelled exit = %d, want %d\n%s", code, ExitInterrupted, buf.String())
+	}
+}
+
+func TestRun_WritesLog(t *testing.T) {
+	dir := t.TempDir()
+	lib := filepath.Join(dir, "Library")
+	if code, out := runCLI(t, "-out", lib, takeoutFixture(t, dir)); code != ExitOK {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	logs, _ := filepath.Glob(filepath.Join(lib, "photosorter_*.log"))
+	if len(logs) != 1 {
+		t.Fatalf("found %d log files, want 1", len(logs))
+	}
+	if data, _ := os.ReadFile(logs[0]); !strings.Contains(string(data), "Imported: "+year+"IMG_0001.jpg") {
+		t.Errorf("log content:\n%s", data)
+	}
+}
