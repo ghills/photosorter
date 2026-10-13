@@ -36,6 +36,7 @@ func TestCountMediaFiles(t *testing.T) {
 		"a.jpg":                    "a",
 		"2023-01-01/b.PNG":         "b", // extension matching is case-insensitive
 		"Albums/Trip/c.mp4":        "c",
+		"__MACOSX/Trip/d.jpg":      "inside a __MACOSX folder",
 		"notes.txt":                "not media",
 		"2023-01-01/b.jpg.json":    "{}",
 		"2023-01-01/._e.jpg":       "resource fork file",

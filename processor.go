@@ -43,6 +43,15 @@ func NewProcessor(sources []InputSource, outputDir string, db *HashDB, workers i
 // Run processes every source. It stops early, after finishing or aborting in-flight
 // files, when ctx is cancelled or the database stops accepting writes. In both cases
 // the final report is still printed and the cause is returned.
+// FilesFailedError is returned by Run when the pipeline finished but some files could not be processed.
+type FilesFailedError struct {
+	Count int
+}
+
+func (e *FilesFailedError) Error() string {
+	return fmt.Sprintf("%d file(s) failed to process", e.Count)
+}
+
 func (p *Processor) Run(ctx context.Context) error {
 	var duplicatesSkipped int32
 	var countExif int32
@@ -53,6 +62,7 @@ func (p *Processor) Run(ctx context.Context) error {
 	var shortVideosSkipped int32
 	var errorsCount int32
 	var interrupted int32
+	var unreadable int32
 
 	for _, src := range p.Sources {
 		if ctx.Err() != nil || p.DB.Err() != nil {
@@ -63,6 +73,14 @@ func (p *Processor) Run(ctx context.Context) error {
 		}
 
 		mediaFiles, err := src.MediaFiles()
+		if w, ok := src.(interface{ Warnings() []string }); ok {
+			for _, msg := range w.Warnings() {
+				atomic.AddInt32(&unreadable, 1)
+				if p.Logger != nil {
+					p.Logger.Printf("Skipped unreadable path: %s", msg)
+				}
+			}
+		}
 		if err != nil {
 			if p.Logger != nil {
 				p.Logger.Printf("Failed to scan source %s: %v", src.Name(), err)
@@ -153,6 +171,9 @@ func (p *Processor) Run(ctx context.Context) error {
 	fmt.Printf("Duplicates Skipped       : %d\n", duplicatesSkipped)
 	fmt.Printf("Short Videos Skipped     : %d\n", shortVideosSkipped)
 	fmt.Printf("Errors                   : %d\n", errorsCount)
+	if unreadable > 0 {
+		fmt.Printf("Unreadable Paths Skipped : %d (see log)\n", unreadable)
+	}
 	if interrupted > 0 {
 		fmt.Printf("Aborted mid-copy         : %d (safe to re-run)\n", interrupted)
 	}
@@ -160,7 +181,13 @@ func (p *Processor) Run(ctx context.Context) error {
 	if err := p.DB.Err(); err != nil {
 		return fmt.Errorf("database write failed: %w", err)
 	}
-	return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if errorsCount > 0 {
+		return &FilesFailedError{Count: int(errorsCount)}
+	}
+	return nil
 }
 
 // safeProcessFile converts a panic while handling one file into an error so a single

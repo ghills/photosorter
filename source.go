@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -94,7 +95,11 @@ func (z *ZipMediaFile) OpenSidecar() (io.ReadCloser, bool) {
 type LocalFolderSource struct {
 	path     string
 	sidecars *SidecarIndex
+	warnings []string
 }
+
+// Warnings lists paths skipped during the last scan (unreadable files or folders).
+func (l *LocalFolderSource) Warnings() []string { return l.warnings }
 
 // NewLocalFolderSource reads media from a directory tree. Sidecars found during the walk are
 // registered in idx (a private index is used if nil).
@@ -111,8 +116,10 @@ func (l *LocalFolderSource) Name() string {
 
 func (l *LocalFolderSource) MediaFiles() ([]MediaFile, error) {
 	var mediaFiles []MediaFile
+	l.warnings = nil
 	err := filepath.WalkDir(l.path, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
+			l.warnings = append(l.warnings, fmt.Sprintf("%s: %v", p, err))
 			return nil // Skip paths we can't access
 		}
 		if d.IsDir() {
@@ -121,7 +128,7 @@ func (l *LocalFolderSource) MediaFiles() ([]MediaFile, error) {
 		if isSidecarFile(d.Name()) {
 			p := p
 			l.sidecars.Add(filepath.ToSlash(p), func() (io.ReadCloser, error) { return os.Open(p) })
-		} else if IsMedia(d.Name()) {
+		} else if IsMedia(relMediaPath(l.path, p)) {
 			mediaFiles = append(mediaFiles, &LocalMediaFile{path: p, sidecars: l.sidecars})
 		}
 		return nil

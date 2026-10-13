@@ -51,9 +51,20 @@ Alternatively, to process a local directory of media files instead of a zip file
 - `-in <path>`: Process an existing folder on your local filesystem instead of a zip file.
 
 - `-workers <number>`: Number of concurrent workers for processing (default 8).
-- `-dry-run`: Run a simulation of extraction and database insertion, without actually modifying the disk.
+- `-dry-run`: Run a simulation of extraction without writing any files or database records. Duplicates within the run are still detected.
+- `-tz <name>`: IANA timezone (e.g. `America/New_York`) used to turn capture timestamps into `YYYY-MM-DD` folders. Defaults to this machine's timezone. Set it when running somewhere other than where the photos were taken (a server or container in UTC, for example), so photos taken in the evening don't land in the next day's folder.
 - `-nosync`: Prevent automatic library sync from running.
 - `-skip-short-videos <seconds>`: Skip importing `mp4` and `mov` videos shorter than or equal to this duration (default 3). This is useful for ignoring small 1-2s "motion photos" without importing them as standalone videos.
+
+### Exit Codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Everything was processed |
+| `1` | A fatal error, or the run finished but some files could not be processed (see the log) |
+| `130` | Interrupted with Ctrl-C or SIGTERM. Finished files were recorded, so re-run to continue |
+
+`-in` and `-out` must not contain one another; PhotoSorter refuses to start if they do.
 
 ### Syncing an Existing Library
 

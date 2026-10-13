@@ -109,11 +109,25 @@ func IsImage(filename string) bool {
 	return false
 }
 
+// relMediaPath returns p relative to root so IsMedia judges only the part of the path
+// inside the folder being scanned, not wherever the user happened to put it.
+func relMediaPath(root, p string) string {
+	if rel, err := filepath.Rel(root, p); err == nil {
+		return rel
+	}
+	return p
+}
+
 // IsMedia verifies if the filename extension is accepted by the photosorter pipeline.
 func IsMedia(filename string) bool {
 	// Ignore macOS hidden system files and resource forks
-	if strings.Contains(filename, "__MACOSX") || strings.HasPrefix(filepath.Base(filename), "._") {
+	if strings.HasPrefix(filepath.Base(filename), "._") {
 		return false
+	}
+	for _, part := range strings.Split(filepath.ToSlash(filename), "/") {
+		if part == "__MACOSX" {
+			return false
+		}
 	}
 
 	ext := strings.ToLower(filepath.Ext(filename))

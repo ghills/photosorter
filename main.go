@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata" // lets -tz work on systems without a zoneinfo database
 )
 
 const exitInterrupted = 130
@@ -39,12 +40,22 @@ func run() int {
 	nosyncFlag := flag.Bool("nosync", false, "Prevent automatic library sync from running")
 	workersFlag := flag.Int("workers", 8, "Number of concurrent workers")
 	dryRunFlag := flag.Bool("dry-run", false, "Simulate extraction without writing to disk")
+	tzFlag := flag.String("tz", "", "IANA timezone (e.g. America/New_York) used to turn timestamps into dates; defaults to this machine's timezone")
 	skipShortVideosFlag := flag.Int("skip-short-videos", 3, "Skip importing videos shorter than or equal to this many seconds (e.g. motion photos)")
 	flag.Parse()
 
 	if *outFlag == "" {
 		fmt.Println("An output folder (-out) is required.")
 		return 1
+	}
+
+	if *tzFlag != "" {
+		loc, err := time.LoadLocation(*tzFlag)
+		if err != nil {
+			fmt.Printf("Invalid -tz %q: %v\n", *tzFlag, err)
+			return 1
+		}
+		time.Local = loc
 	}
 
 	var sources []InputSource
@@ -55,6 +66,10 @@ func run() int {
 		_, err := os.Stat(*inFlag)
 		if err != nil {
 			fmt.Printf("Input directory does not exist or cannot be accessed: %s\n", *inFlag)
+			return 1
+		}
+		if pathsOverlap(*inFlag, *outFlag) {
+			fmt.Printf("The input folder (%s) and output folder (%s) must not contain one another.\n", *inFlag, *outFlag)
 			return 1
 		}
 		sources = append(sources, NewLocalFolderSource(*inFlag, sidecars))
@@ -173,6 +188,12 @@ func run() int {
 			fmt.Println("Interrupted. Finished files were recorded; re-run to continue.")
 			closeDB()
 			return exitInterrupted
+		}
+		var failed *FilesFailedError
+		if errors.As(err, &failed) {
+			fmt.Printf("Finished, but %d file(s) could not be processed. See the log for details.\n", failed.Count)
+			closeDB()
+			return 1
 		}
 		if err != nil {
 			fmt.Printf("Pipeline error: %v\n", err)
