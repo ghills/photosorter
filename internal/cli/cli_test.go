@@ -230,6 +230,35 @@ func TestRun_SyncOnly(t *testing.T) {
 	}
 }
 
+// A file deleted from the library stays in the database, so it is skipped on the
+// next import until -prune forgets it.
+func TestRun_PruneAllowsReimportOfDeletedFiles(t *testing.T) {
+	dir := t.TempDir()
+	lib := filepath.Join(dir, "Library")
+	zip := takeoutFixture(t, dir)
+	if code, out := runCLI(t, "-out", lib, zip); code != ExitOK {
+		t.Fatalf("import: exit %d\n%s", code, out)
+	}
+	before := mediaIn(t, lib)
+	victim := filepath.Join(lib, filepath.FromSlash(before[0]))
+	if err := os.Remove(victim); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, out := runCLI(t, "-out", lib, "-dry-run", "-prune"); code != ExitOK || !strings.Contains(out, "Would prune 1 cached hash") {
+		t.Fatalf("dry-run prune: exit %d\n%s", code, out)
+	}
+	if code, out := runCLI(t, "-out", lib, "-prune"); code != ExitOK || !strings.Contains(out, "Pruned 1 cached hash") || !strings.Contains(out, filepath.Base(victim)) {
+		t.Fatalf("prune: exit %d\n%s", code, out)
+	}
+	if code, out := runCLI(t, "-out", lib, zip); code != ExitOK {
+		t.Fatalf("re-import: exit %d\n%s", code, out)
+	}
+	if after := mediaIn(t, lib); strings.Join(after, "\n") != strings.Join(before, "\n") {
+		t.Errorf("deleted file was not re-imported:\nbefore %v\nafter  %v", before, after)
+	}
+}
+
 func TestRun_ExitCodes(t *testing.T) {
 	dir := t.TempDir()
 	if code, _ := runCLI(t, "-h"); code != ExitOK {

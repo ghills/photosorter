@@ -50,6 +50,10 @@ type DB struct {
 	// readOnly keeps records in memory only (see [OpenReadOnly]).
 	readOnly bool
 
+	// pruned holds hashes [DB.Prune] removed from a read-only database, which are
+	// still on disk but must be treated as absent.
+	pruned sync.Map
+
 	queue      chan record
 	writerDone chan struct{}
 
@@ -177,6 +181,66 @@ func (db *DB) SetLibraryFiles(n int) error {
 	return err
 }
 
+// Prune forgets every recorded hash not in keep, so content that has left the library
+// can be imported again. It returns the file names the removed hashes were recorded
+// under. Records still queued are not affected; callers should only queue hashes that
+// are in keep. In a read-only database nothing is removed from disk, but the names are
+// still returned and the hashes are forgotten for the rest of the run.
+func (db *DB) Prune(keep map[string]struct{}) ([]string, error) {
+	rows, err := db.sql.Query("SELECT hash, COALESCE(filename, '') FROM processed_hashes")
+	if err != nil {
+		return nil, err
+	}
+	var stale, names []string
+	for rows.Next() {
+		var hash, name string
+		if err := rows.Scan(&hash, &name); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if _, ok := keep[hash]; !ok {
+			stale = append(stale, hash)
+			names = append(names, name)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(stale) == 0 {
+		return nil, nil
+	}
+
+	if !db.readOnly {
+		tx, err := db.sql.Begin()
+		if err != nil {
+			return nil, err
+		}
+		stmt, err := tx.Prepare("DELETE FROM processed_hashes WHERE hash = ?")
+		if err != nil {
+			tx.Rollback()
+			return nil, err
+		}
+		defer stmt.Close()
+		for _, hash := range stale {
+			if _, err := stmt.Exec(hash); err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	}
+	for _, hash := range stale {
+		if db.readOnly {
+			db.pruned.Store(hash, true)
+		}
+		db.settle(hash, false)
+	}
+	return names, nil
+}
+
 // Claim atomically reserves hash for the caller. It returns true only for the first
 // caller to claim a hash that is not already recorded, so concurrent workers holding
 // identical content cannot both import it. If another caller holds the claim, Claim
@@ -298,6 +362,9 @@ func (db *DB) closeSQL() error {
 }
 
 func (db *DB) inSQL(hash string) (bool, error) {
+	if _, ok := db.pruned.Load(hash); ok {
+		return false, nil
+	}
 	var one int
 	err := db.existsStmt.QueryRow(hash).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {

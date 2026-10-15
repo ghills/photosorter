@@ -50,6 +50,10 @@ type Config struct {
 	// It overrides NoSync.
 	Sync bool `toml:"sync"`
 
+	// Prune syncs the library, then forgets cached hashes of content no longer in it,
+	// so that content can be imported again (-prune). It implies Sync.
+	Prune bool `toml:"prune"`
+
 	// NoSync disables the automatic sync that runs when the library holds files the
 	// database does not know about (-no-sync).
 	NoSync bool `toml:"no_sync"`
@@ -185,8 +189,8 @@ func (c Config) Validate() error {
 	if c.Library == "" {
 		add("an output library folder is required (-out)")
 	}
-	if len(c.Folders) == 0 && len(c.Zips) == 0 && !c.Sync {
-		add("nothing to do: give an input (-in, -zip) or -sync")
+	if len(c.Folders) == 0 && len(c.Zips) == 0 && !c.Sync && !c.Prune {
+		add("nothing to do: give an input (-in, -zip), -sync or -prune")
 	}
 	if c.Workers < 1 {
 		add("workers must be at least 1, got %d", c.Workers)

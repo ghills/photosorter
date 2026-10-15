@@ -259,3 +259,30 @@ func TestDB_PragmasApplyToEveryConnectionAndOddPaths(t *testing.T) {
 		t.Errorf("db not created at expected path: %v", err)
 	}
 }
+
+func TestDB_PruneReadOnlyWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	db := openDB(t, dir)
+	db.Record("keep", "a.jpg")
+	db.Record("stale", "b.jpg")
+	db.Close()
+
+	ro, err := OpenReadOnly(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names, err := ro.Prune(map[string]struct{}{"keep": {}})
+	if err != nil || len(names) != 1 || names[0] != "b.jpg" {
+		t.Fatalf("Prune = %v, %v; want [b.jpg]", names, err)
+	}
+	if ok, _ := ro.Claim("stale"); !ok {
+		t.Error("read-only DB still treats pruned hash as present")
+	}
+	if ok, _ := ro.Claim("keep"); ok {
+		t.Error("read-only DB forgot a kept hash")
+	}
+	ro.Close()
+	if n := count(t, openDB(t, dir)); n != 2 {
+		t.Errorf("read-only prune changed the database: count = %d, want 2", n)
+	}
+}

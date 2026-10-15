@@ -73,6 +73,7 @@ func newFlagSet(cfg *config.Config, configPath *string, output io.Writer) *flag.
 	fs.Var(newListFlag(&cfg.Zips, false), "zip", "Import from this Takeout zip `file` or glob pattern (repeatable)")
 
 	fs.BoolVar(&cfg.Sync, "sync", cfg.Sync, "Hash every file already in the library before importing")
+	fs.BoolVar(&cfg.Prune, "prune", cfg.Prune, "Sync the library, then forget cached hashes of files no longer in it so they can be imported again")
 	fs.BoolVar(&cfg.NoSync, "no-sync", cfg.NoSync, "Never sync the library automatically")
 	fs.BoolVar(&cfg.NoSync, "nosync", cfg.NoSync, "Deprecated spelling of -no-sync")
 	fs.BoolVar(&cfg.DryRun, "dry-run", cfg.DryRun, "Show what would happen without writing anything")
@@ -101,6 +102,7 @@ skipping media the library already has and filing the rest by date or album.
 Usage:
   photosorter -out <library> [flags] [takeout.zip | folder ...]
   photosorter -out <library> -sync
+  photosorter -out <library> -prune
 
 Examples:
   photosorter -out ~/Photos takeout-*.zip
