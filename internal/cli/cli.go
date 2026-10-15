@@ -133,7 +133,8 @@ func (r *runner) syncLibrary(ctx context.Context, db *library.DB) (libraryFiles,
 		libraryFiles = tracked
 	}
 
-	if !r.cfg.Sync && r.cfg.NoSync {
+	forced := r.cfg.Sync || r.cfg.Prune
+	if !forced && r.cfg.NoSync {
 		return libraryFiles, ExitOK, true
 	}
 	files, err := library.Scan(ctx, r.cfg.Library, r.filter)
@@ -141,7 +142,7 @@ func (r *runner) syncLibrary(ctx context.Context, db *library.DB) (libraryFiles,
 		r.printf("Interrupted while scanning the library.\n")
 		return 0, ExitInterrupted, false
 	}
-	needed := r.cfg.Sync
+	needed := forced
 	if onDisk := len(files.Paths); !needed {
 		switch {
 		case onDisk > 0 && tracked == 0:
@@ -159,6 +160,7 @@ func (r *runner) syncLibrary(ctx context.Context, db *library.DB) (libraryFiles,
 	res, err := library.Sync(ctx, files, db, library.SyncOptions{
 		Workers:  r.cfg.Workers,
 		Progress: r.stderr,
+		Prune:    r.cfg.Prune,
 	})
 	r.listPaths("could not read", files.Unreadable)
 	r.listPaths("could not hash", res.Failed)
@@ -171,7 +173,30 @@ func (r *runner) syncLibrary(ctx context.Context, db *library.DB) (libraryFiles,
 		return 0, ExitFailure, false
 	}
 	r.printf("Sync complete: %d files hashed.\n", res.Hashed)
+	if r.cfg.Prune {
+		r.reportPrune(res)
+	}
 	return len(files.Paths), ExitOK, true
+}
+
+// reportPrune prints the outcome of a -prune sync.
+func (r *runner) reportPrune(res library.SyncResult) {
+	if res.PruneSkipped != "" {
+		fmt.Fprintf(r.stderr, "warning: not pruning the database: %s.\n", res.PruneSkipped)
+		return
+	}
+	verb := "Pruned"
+	if r.cfg.DryRun {
+		verb = "Would prune"
+	}
+	r.printf("%s %d cached hash(es) of files no longer in the library.\n", verb, len(res.Pruned))
+	for i, name := range res.Pruned {
+		if i == maxListed {
+			r.printf("  ... and %d more\n", len(res.Pruned)-maxListed)
+			break
+		}
+		r.printf("  %s\n", name)
+	}
 }
 
 // importAll runs the importer over every source and prints its report. libraryFiles

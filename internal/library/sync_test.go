@@ -207,3 +207,65 @@ func TestSync_ManyFilesConcurrently(t *testing.T) {
 		t.Errorf("persisted %d hashes, want 300", n)
 	}
 }
+
+func TestSync_PruneForgetsRemovedContent(t *testing.T) {
+	lib := t.TempDir()
+	writeFiles(t, lib, map[string]string{"a.jpg": "a", "b.jpg": "b"})
+	dbDir := t.TempDir()
+	db := openDB(t, dbDir)
+	if _, err := Sync(context.Background(), scan(t, lib), db, syncOpts()); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	if err := os.Remove(filepath.Join(lib, "b.jpg")); err != nil {
+		t.Fatal(err)
+	}
+	db = openDB(t, dbDir)
+	opts := syncOpts()
+	opts.Prune = true
+	res, err := Sync(context.Background(), scan(t, lib), db, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Pruned) != 1 || res.Pruned[0] != "b.jpg" || res.PruneSkipped != "" {
+		t.Errorf("result = %+v, want b.jpg pruned", res)
+	}
+	if ok, _ := db.Claim(hashOf("b")); !ok {
+		t.Error("pruned content is still treated as present")
+	}
+	db.Release(hashOf("b"))
+	db.Close()
+
+	db = openDB(t, dbDir)
+	if n := count(t, db); n != 1 {
+		t.Errorf("persisted %d hashes after prune, want 1", n)
+	}
+	if ok, _ := has(db, hashOf("a")); !ok {
+		t.Error("content still in the library was pruned")
+	}
+}
+
+func TestSync_PruneSkippedWhenLibraryLooksIncomplete(t *testing.T) {
+	db := openDB(t, t.TempDir())
+	db.Record(hashOf("gone"), "gone.jpg")
+	opts := syncOpts()
+	opts.Prune = true
+
+	res, err := Sync(context.Background(), scan(t, t.TempDir()), db, opts)
+	if err != nil || res.PruneSkipped == "" || len(res.Pruned) != 0 {
+		t.Errorf("empty library: %+v, %v; want prune skipped", res, err)
+	}
+
+	lib := t.TempDir()
+	writeFiles(t, lib, map[string]string{"a.jpg": "a"})
+	files := scan(t, lib)
+	files.Unreadable = []string{"x: permission denied"}
+	res, err = Sync(context.Background(), files, db, opts)
+	if err != nil || res.PruneSkipped == "" || len(res.Pruned) != 0 {
+		t.Errorf("unreadable path: %+v, %v; want prune skipped", res, err)
+	}
+	if ok, _ := has(db, hashOf("gone")); !ok {
+		t.Error("hash was pruned despite the skip")
+	}
+}

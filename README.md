@@ -88,6 +88,14 @@ The database only knows about files PhotoSorter imported. If you add files to th
 
 A sync also runs on its own when the library contains media but the database is empty, for example on the first run against an existing library. If the library has more media files than it held after the last sync or import, PhotoSorter warns you. Pass `-no-sync` to turn off the automatic sync.
 
+Deleting a file from the library does not remove its hash, so the same content is still skipped by later imports. That keeps photos you deleted on purpose from coming back. To make PhotoSorter forget files that are gone, run a **prune**. It syncs the library, then removes every cached hash whose content is no longer in it:
+
+```bash
+./photosorter -out ~/Pictures/Library -prune
+```
+
+Add `-dry-run` to list what would be pruned without changing the database. As a safeguard, a prune is skipped if the library has no media files or any file in it could not be read.
+
 ## Command-line reference
 
 ```
@@ -103,6 +111,7 @@ Positional arguments are inputs: folders are imported like `-in`, and anything e
 | `-zip <file or glob>` | | Import from a Takeout zip, e.g. `"takeout-*.zip"`. Repeatable |
 | `-config <file>` | `<out>/photosorter.toml` | Load settings from this TOML file |
 | `-sync` | off | Hash the existing library before importing |
+| `-prune` | off | Sync, then forget cached hashes of files no longer in the library so they can be imported again |
 | `-no-sync` | off | Never sync automatically (`-nosync` is still accepted) |
 | `-dry-run` | off | Go through the import without writing anything to the library (files, database or log) |
 | `-workers <n>` | 8 | Files processed concurrently |

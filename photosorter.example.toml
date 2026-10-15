@@ -15,6 +15,10 @@
 # Hash every file already in the library before importing (-sync).
 # sync = false
 
+# Sync, then forget cached hashes of files no longer in the library, so they can be
+# imported again (-prune). Usually given on the command line rather than set here.
+# prune = false
+
 # Never sync the library automatically (-no-sync). Normally PhotoSorter syncs on its
 # own when the library has files but the database is empty.
 # no_sync = false
