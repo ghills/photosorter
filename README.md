@@ -7,9 +7,33 @@ PhotoSorter imports [Google Takeout](https://takeout.google.com/) exports of Goo
 - **Albums kept.** Media from your Google Photos albums can stay grouped as albums.
 - **Works on the zips directly.** No need to extract multi-gigabyte archives first. Extracted folders work too.
 
+## Download
+
+Ready-to-run builds of the latest `main` are on the [releases page](https://github.com/ghills/photosorter/releases/latest). No Go install needed.
+
+| Platform | File |
+|---|---|
+| Windows (most PCs) | [`photosorter-windows-amd64.zip`](https://github.com/ghills/photosorter/releases/latest/download/photosorter-windows-amd64.zip) |
+| Windows on ARM | [`photosorter-windows-arm64.zip`](https://github.com/ghills/photosorter/releases/latest/download/photosorter-windows-arm64.zip) |
+| macOS (Intel and Apple silicon) | [`photosorter-macos-universal.tar.gz`](https://github.com/ghills/photosorter/releases/latest/download/photosorter-macos-universal.tar.gz) |
+
+PhotoSorter is a command-line program: unpack the download and run it from a terminal.
+
+- **Windows:** extract the zip, open PowerShell in that folder, and run `.\photosorter.exe -h`. The builds aren't code-signed, so SmartScreen may warn the first time; choose **More info → Run anyway**.
+- **macOS:** double-click the `.tar.gz` to unpack it, then in Terminal, from that folder:
+
+  ```bash
+  xattr -d com.apple.quarantine photosorter
+  ./photosorter -h
+  ```
+
+  The `xattr` step clears the "downloaded from the internet" flag; without it macOS refuses to open an unsigned program.
+
+Each merge to `main` publishes a new build, with a `SHA256SUMS.txt` to verify downloads.
+
 ## Quick start
 
-Requires [Go](https://go.dev/) 1.23 or newer.
+To build from source instead, you need [Go](https://go.dev/) 1.23 or newer.
 
 ```bash
 git clone https://github.com/ghills/photosorter.git
