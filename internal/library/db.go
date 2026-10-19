@@ -181,6 +181,17 @@ func (db *DB) SetLibraryFiles(n int) error {
 	return err
 }
 
+// SetFilename changes the file name hash is recorded under, for when a file in the
+// library is renamed. It does nothing if hash is not recorded, or in a read-only
+// database. Records still queued are not affected.
+func (db *DB) SetFilename(hash, name string) error {
+	if db.readOnly {
+		return nil
+	}
+	_, err := db.sql.Exec("UPDATE processed_hashes SET filename = ? WHERE hash = ?", name, hash)
+	return err
+}
+
 // Prune forgets every recorded hash not in keep, so content that has left the library
 // can be imported again. It returns the file names the removed hashes were recorded
 // under. Records still queued are not affected; callers should only queue hashes that

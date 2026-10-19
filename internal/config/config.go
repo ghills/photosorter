@@ -54,6 +54,10 @@ type Config struct {
 	// so that content can be imported again (-prune). It implies Sync.
 	Prune bool `toml:"prune"`
 
+	// Reorganize moves dated folders at the top of the library into year folders
+	// before anything else is done (-reorganize).
+	Reorganize bool `toml:"reorganize"`
+
 	// NoSync disables the automatic sync that runs when the library holds files the
 	// database does not know about (-no-sync).
 	NoSync bool `toml:"no_sync"`
@@ -189,8 +193,8 @@ func (c Config) Validate() error {
 	if c.Library == "" {
 		add("an output library folder is required (-out)")
 	}
-	if len(c.Folders) == 0 && len(c.Zips) == 0 && !c.Sync && !c.Prune {
-		add("nothing to do: give an input (-in, -zip), -sync or -prune")
+	if len(c.Folders) == 0 && len(c.Zips) == 0 && !c.Sync && !c.Prune && !c.Reorganize {
+		add("nothing to do: give an input (-in, -zip), -sync, -prune or -reorganize")
 	}
 	if c.Workers < 1 {
 		add("workers must be at least 1, got %d", c.Workers)

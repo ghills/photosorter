@@ -131,6 +131,7 @@ func TestValidate_Accepts(t *testing.T) {
 		"nested unknown":         func(c *Config) { c.Layout.UnknownDir = "misc/Undated" },
 		"albums ignored, no dir": func(c *Config) { c.Layout.Albums = AlbumsIgnore; c.Layout.AlbumsDir = "" },
 		"zip only":               func(c *Config) { c.Sync = false; c.Zips = []string{"x.zip"} },
+		"reorganize only":        func(c *Config) { c.Sync = false; c.Reorganize = true },
 		"zone":                   func(c *Config) { c.TimeZone = "America/New_York" },
 	}
 	for name, mutate := range tests {

@@ -19,6 +19,10 @@
 # imported again (-prune). Usually given on the command line rather than set here.
 # prune = false
 
+# Move dated folders at the top of the library into year folders before anything
+# else (-reorganize): 2023-05-14/ becomes 2023/2023-05-14/. Safe to repeat.
+# reorganize = false
+
 # Never sync the library automatically (-no-sync). Normally PhotoSorter syncs on its
 # own when the library has files but the database is empty.
 # no_sync = false
@@ -45,11 +49,12 @@
 [layout]
 # Folder for dated files, as a Go time layout using the reference date
 # 2006-01-02 15:04:05 (-date-format). Slashes create nested folders:
+#   "2006/2006-01-02" -> 2023/2023-05-14/
 #   "2006-01-02"   -> 2023-05-14/
 #   "2006/01"      -> 2023/05/
 #   "2006/2006-01" -> 2023/2023-05/
 #   "2006/Jan"     -> 2023/May/
-# date_format = "2006-01-02"
+# date_format = "2006/2006-01-02"
 
 # Folder for files whose date can't be determined (-unknown-dir).
 # unknown_dir = "Unknown_Date"

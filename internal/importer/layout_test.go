@@ -22,13 +22,13 @@ func TestLayout_Dir(t *testing.T) {
 		src    DateSource
 		want   string
 	}{
-		{"default dated", DefaultLayout(), plain, DateFromEXIF, "2023-05-14"},
+		{"default dated", DefaultLayout(), plain, DateFromEXIF, "2023/2023-05-14"},
 		{"default unknown", DefaultLayout(), plain, DateUnknown, "Unknown_Date"},
 		{"default album", DefaultLayout(), album, DateFromEXIF, "Albums/Hawaii"},
 		{"album wins over unknown date", DefaultLayout(), album, DateUnknown, "Albums/Hawaii"},
 		{"nested date format", nested, plain, DateFromFilename, "2023/05"},
 		{"nested unknown dir", nested, plain, DateUnknown, "misc/undated"},
-		{"albums ignored", noAlbums, album, DateFromEXIF, "2023-05-14"},
+		{"albums ignored", noAlbums, album, DateFromEXIF, "2023/2023-05-14"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

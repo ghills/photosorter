@@ -37,8 +37,9 @@ With the default settings:
 
 ```
 Library/
-├── 2023-05-14/                IMG_1234.jpg, VID_5678.mp4, ...
-├── 2023-05-15/
+├── 2023/
+│   ├── 2023-05-14/            IMG_1234.jpg, VID_5678.mp4, ...
+│   └── 2023-05-15/
 ├── Albums/
 │   └── Hawaii Trip/           media from a Google Photos album
 ├── Unknown_Date/              files whose date could not be determined
@@ -48,6 +49,26 @@ Library/
 ```
 
 If a name is already taken in the destination folder, the new file gets a suffix (`IMG_1234_1.jpg`). Existing files are never overwritten. The folder names and the album behaviour are configurable (see [Configuration](#configuration)).
+
+### Reorganizing an existing library
+
+Older versions put every dated folder at the top of the library (`2023-05-14/`). To move them into year folders, run a **reorganize**:
+
+```bash
+./photosorter -out ~/Pictures/Library -reorganize
+```
+
+Each folder at the top of the library goes into the folder for its year, along with everything inside it. Folders you renamed keep their names: `2025-10-02 foo bar/` becomes `2025/2025-10-02 foo bar/`.
+
+- **Folders whose name starts with a year** (`2023-05-14`, `2023 Christmas`) go to that year.
+- **Other folders** (`Road trip/`) are dated by the media inside them: EXIF first, then the date in the file name. A folder is moved only if every media file in it has a date and they all fall in the same year. Otherwise it stays where it is, and the run says why.
+- **Left alone:** year folders, the unknown-date and albums folders, hidden folders, and loose files.
+
+If the target folder already exists, for example because an import already used the new layout, the two are merged. Nothing is overwritten. A file whose name and content are both already in the target is removed. A file whose name is taken by different content gets a `_N` suffix.
+
+The hash database tracks content, not folders, so moving files doesn't invalidate it. Renamed files get their database entry updated, and the library's file count drops by the number of duplicates removed.
+
+Reorganizing is safe to repeat. Folders already moved are not moved again, and running it again finishes a merge that was interrupted. Add `-dry-run` to see what would move first. Every move is written to the run's log.
 
 ## How dates are found
 
@@ -112,13 +133,14 @@ Positional arguments are inputs: folders are imported like `-in`, and anything e
 | `-config <file>` | `<out>/photosorter.toml` | Load settings from this TOML file |
 | `-sync` | off | Hash the existing library before importing |
 | `-prune` | off | Sync, then forget cached hashes of files no longer in the library so they can be imported again |
+| `-reorganize` | off | Move dated folders at the top of the library into year folders (see [Reorganizing](#reorganizing-an-existing-library)) |
 | `-no-sync` | off | Never sync automatically (`-nosync` is still accepted) |
 | `-dry-run` | off | Go through the import without writing anything to the library (files, database or log) |
 | `-workers <n>` | 8 | Files processed concurrently |
 | `-max-buffer-mb <MB>` | 16 | Files up to this size are read once and kept in memory for hashing, dating and copying. 0 disables this. Peak memory is about `workers × MB` |
 | `-tz <zone>` | machine's zone | IANA zone, e.g. `America/New_York`, used to date sidecar timestamps |
 | `-skip-short-videos <s>` | 3 | Skip MP4/MOV videos this many seconds long or shorter, such as motion-photo clips. 0 imports all videos. Skipped clips aren't recorded, so a later run with a lower value imports them |
-| `-date-format <layout>` | `2006-01-02` | Go time layout for dated folders. Slashes nest: `2006/01` → `2023/05/` |
+| `-date-format <layout>` | `2006/2006-01-02` | Go time layout for dated folders. Slashes nest: `2006/2006-01-02` → `2023/2023-05-14/`, `2006-01-02` → `2023-05-14/` (the old flat layout) |
 | `-unknown-dir <folder>` | `Unknown_Date` | Folder for undated files |
 | `-albums folder\|ignore` | `folder` | Keep albums together, or file their media by date |
 | `-albums-dir <folder>` | `Albums` | Parent folder for albums |
@@ -191,7 +213,7 @@ CI runs these steps plus [staticcheck](https://staticcheck.dev/) on Linux and ma
 | [`internal/source`](internal/source) | Zip and folder inputs, behind the `Source`/`File` interfaces |
 | [`internal/takeout`](internal/takeout) | Takeout specifics: sidecar matching, sidecar JSON, album folders |
 | [`internal/media`](internal/media) | Media file types, EXIF and file-name dates, MP4 duration |
-| [`internal/library`](internal/library) | The hash database, content hashing, library sync |
+| [`internal/library`](internal/library) | The hash database, content hashing, library sync, reorganizing into year folders |
 | [`internal/importer`](internal/importer) | The per-file import pipeline, folder layout, atomic writes, run report |
 | [`internal/parallel`](internal/parallel) | Shared worker pool with a progress bar |
 

@@ -10,7 +10,7 @@ import (
 // Layout decides where in the library each file goes.
 type Layout struct {
 	// DateFormat names dated folders, as a Go time layout. Slashes create nested
-	// folders: "2006-01-02" gives 2023-05-14/, "2006/01" gives 2023/05/.
+	// folders: "2006/2006-01-02" gives 2023/2023-05-14/, "2006/01" gives 2023/05/.
 	DateFormat string
 
 	// UnknownDir holds files whose date could not be determined.
@@ -24,11 +24,11 @@ type Layout struct {
 	KeepAlbums bool
 }
 
-// DefaultLayout returns the layout PhotoSorter has always used:
-// YYYY-MM-DD/, Unknown_Date/ and Albums/<name>/.
+// DefaultLayout returns PhotoSorter's default layout: YYYY/YYYY-MM-DD/,
+// Unknown_Date/ and Albums/<name>/.
 func DefaultLayout() Layout {
 	return Layout{
-		DateFormat: "2006-01-02",
+		DateFormat: "2006/2006-01-02",
 		UnknownDir: "Unknown_Date",
 		AlbumsDir:  "Albums",
 		KeepAlbums: true,

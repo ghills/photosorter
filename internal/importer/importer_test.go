@@ -24,10 +24,10 @@ func TestRun_ImportsAndSkipsDuplicates(t *testing.T) {
 		newMemFile("IMG_20230102.jpg", "image content A"), // same bytes, different name
 	))
 
-	if got := readFile(t, lib, "2023-01-01", "IMG_20230101.jpg"); got != "image content A" {
+	if got := readFile(t, lib, "2023/2023-01-01", "IMG_20230101.jpg"); got != "image content A" {
 		t.Errorf("imported content = %q", got)
 	}
-	if names := listDir(t, filepath.Join(lib, "2023-01-02")); len(names) != 0 {
+	if names := listDir(t, filepath.Join(lib, "2023/2023-01-02")); len(names) != 0 {
 		t.Errorf("duplicate was written: %v", names)
 	}
 	if report.TotalImported() != 1 || report.Imported[DateFromFilename] != 1 || report.Duplicates != 1 {
@@ -52,7 +52,7 @@ func TestRun_AlbumCopyWinsOverYearFolder(t *testing.T) {
 	if got := readFile(t, im.opts.Library, "Albums", "Trip", "IMG_20230101.jpg"); got != "same" {
 		t.Errorf("album copy = %q", got)
 	}
-	if names := listDir(t, filepath.Join(im.opts.Library, "2023-01-01")); len(names) != 0 {
+	if names := listDir(t, filepath.Join(im.opts.Library, "2023/2023-01-01")); len(names) != 0 {
 		t.Errorf("year-folder copy imported: %v", names)
 	}
 	if report.TotalImported() != 1 || report.Duplicates != 1 {
@@ -76,13 +76,13 @@ func TestRun_ConcurrentSameNameAndDuplicates(t *testing.T) {
 	run(t, im, openZip(t, filepath.Join(dir, "test.zip")))
 
 	lib := im.opts.Library
-	if got := listDir(t, filepath.Join(lib, "2023-01-01")); len(got) != unique {
+	if got := listDir(t, filepath.Join(lib, "2023/2023-01-01")); len(got) != unique {
 		t.Errorf("2023-01-01 has %d files, want %d (same-name files overwritten?)", len(got), unique)
 	}
-	if got := listDir(t, filepath.Join(lib, "2023-01-02")); len(got) != 1 {
+	if got := listDir(t, filepath.Join(lib, "2023/2023-01-02")); len(got) != 1 {
 		t.Errorf("2023-01-02 has %v, want 1 file (identical content imported more than once?)", got)
 	}
-	for _, d := range []string{"2023-01-01", "2023-01-02"} {
+	for _, d := range []string{"2023/2023-01-01", "2023/2023-01-02"} {
 		for _, name := range listDir(t, filepath.Join(lib, d)) {
 			if strings.HasSuffix(name, ".tmp") {
 				t.Errorf("leftover temp file %s/%s", d, name)
@@ -103,7 +103,7 @@ func TestRun_StopsOnCancelledContext(t *testing.T) {
 	if _, err := im.Run(ctx, sourceOf(files...)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run error = %v, want context.Canceled", err)
 	}
-	if names := listDir(t, filepath.Join(im.opts.Library, "2023-01-01")); len(names) != 0 {
+	if names := listDir(t, filepath.Join(im.opts.Library, "2023/2023-01-01")); len(names) != 0 {
 		t.Errorf("%d files written after cancellation", len(names))
 	}
 }
@@ -116,7 +116,7 @@ func TestRun_FailsWhenDatabaseUnavailable(t *testing.T) {
 	if err == nil || report.TotalImported() != 0 {
 		t.Fatalf("Run = %+v, %v; want an error and nothing imported", report, err)
 	}
-	if names := listDir(t, filepath.Join(im.opts.Library, "2023-01-01")); len(names) != 0 {
+	if names := listDir(t, filepath.Join(im.opts.Library, "2023/2023-01-01")); len(names) != 0 {
 		t.Errorf("files written without being recorded: %v", names)
 	}
 }
@@ -178,7 +178,7 @@ func TestRun_SkipsShortVideos(t *testing.T) {
 	if report.ShortVideos != 1 || report.TotalImported() != 1 {
 		t.Errorf("report = %+v, want 1 short video skipped and 1 imported", report)
 	}
-	if names := listDir(t, filepath.Join(im.opts.Library, "2023-01-01")); len(names) != 1 || names[0] != long.name {
+	if names := listDir(t, filepath.Join(im.opts.Library, "2023/2023-01-01")); len(names) != 1 || names[0] != long.name {
 		t.Errorf("imported %v, want only the long video", names)
 	}
 
@@ -198,9 +198,9 @@ func TestRun_SkipsShortVideos(t *testing.T) {
 func TestRun_UsesSidecarDateInConfiguredZone(t *testing.T) {
 	const sidecar = `{"photoTakenTime":{"timestamp":"1672531200"}}` // 2023-01-01T00:00:00Z
 	for _, tc := range []struct{ zone, want string }{
-		{"UTC", "2023-01-01"},
-		{"Pacific/Auckland", "2023-01-01"}, // 13:00 on the 1st
-		{"Pacific/Honolulu", "2022-12-31"}, // 14:00 on the 31st
+		{"UTC", "2023/2023-01-01"},
+		{"Pacific/Auckland", "2023/2023-01-01"}, // 13:00 on the 1st
+		{"Pacific/Honolulu", "2022/2022-12-31"}, // 14:00 on the 31st
 	} {
 		loc, err := time.LoadLocation(tc.zone)
 		if err != nil {
