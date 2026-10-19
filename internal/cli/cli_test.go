@@ -116,10 +116,10 @@ func TestRun_EndToEnd(t *testing.T) {
 	}
 
 	want := []string{
-		"2022-07-08/IMG_0002-edited.jpg", // edited copy dated by the original's sidecar
-		"2022-07-08/IMG_0002.jpg",
-		"2023-03-04/IMG_0001.jpg",                                    // supplemental-metadata sidecar
-		"2023-05-11/a_very_long_file_name_without_any_date_here.jpg", // truncated sidecar
+		"2022/2022-07-08/IMG_0002-edited.jpg", // edited copy dated by the original's sidecar
+		"2022/2022-07-08/IMG_0002.jpg",
+		"2023/2023-03-04/IMG_0001.jpg",                                    // supplemental-metadata sidecar
+		"2023/2023-05-11/a_very_long_file_name_without_any_date_here.jpg", // truncated sidecar
 		"Albums/Hawaii/beach.jpg",
 		"Unknown_Date/mystery.png",
 		"old/existing.jpg", // pre-existing; its copy in the zip was skipped
@@ -293,5 +293,71 @@ func TestRun_WritesLog(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(logs[0]); !strings.Contains(string(data), "Imported: "+year+"IMG_0001.jpg") {
 		t.Errorf("log content:\n%s", data)
+	}
+}
+
+// A library imported with the old flat layout is moved into year folders, a second
+// -reorganize does nothing, and the database still recognises every file.
+func TestRun_Reorganize(t *testing.T) {
+	dir := t.TempDir()
+	lib := filepath.Join(dir, "Library")
+	zip := takeoutFixture(t, dir)
+	if code, out := runCLI(t, "-out", lib, "-date-format", "2006-01-02", zip); code != ExitOK {
+		t.Fatalf("flat import: exit %d\n%s", code, out)
+	}
+	writeFile(t, filepath.Join(lib, "Road trip", "IMG_20210601_101010.jpg"), "trip")
+	writeFile(t, filepath.Join(lib, "2023-05-11 renamed by hand", "x.jpg"), "renamed")
+	writeFile(t, filepath.Join(lib, "Misc", "photo.jpg"), "undated")
+	if code, out := runCLI(t, "-out", lib, "-sync"); code != ExitOK {
+		t.Fatalf("sync: exit %d\n%s", code, out)
+	}
+	flat := mediaIn(t, lib)
+
+	code, out := runCLI(t, "-out", lib, "-reorganize", "-dry-run")
+	if code != ExitOK || !strings.Contains(out, "Would move 5 folder(s)") {
+		t.Fatalf("dry run: exit %d\n%s", code, out)
+	}
+	if got := mediaIn(t, lib); strings.Join(got, "\n") != strings.Join(flat, "\n") {
+		t.Fatalf("dry run moved files:\n%v", got)
+	}
+
+	code, out = runCLI(t, "-out", lib, "-reorganize")
+	if code != ExitOK || !strings.Contains(out, "Moved 5 folder(s)") || !strings.Contains(out, "Misc (1 of 1 media files have no date)") {
+		t.Fatalf("reorganize: exit %d\n%s", code, out)
+	}
+	want := []string{
+		"2021/Road trip/IMG_20210601_101010.jpg",
+		"2022/2022-07-08/IMG_0002-edited.jpg",
+		"2022/2022-07-08/IMG_0002.jpg",
+		"2023/2023-03-04/IMG_0001.jpg",
+		"2023/2023-05-11 renamed by hand/x.jpg",
+		"2023/2023-05-11/a_very_long_file_name_without_any_date_here.jpg",
+		"Albums/Hawaii/beach.jpg",
+		"Misc/photo.jpg", // undated, so left where it is
+		"Unknown_Date/copy_of_existing.jpg",
+		"Unknown_Date/mystery.png",
+	}
+	if got := mediaIn(t, lib); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("library contents:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	logs, _ := filepath.Glob(filepath.Join(lib, "photosorter_*.log"))
+	var logged bool
+	for _, l := range logs {
+		data, _ := os.ReadFile(l)
+		logged = logged || strings.Contains(string(data), "REORGANIZE moved: Road trip -> "+filepath.Join("2021", "Road trip"))
+	}
+	if !logged {
+		t.Error("the move was not logged")
+	}
+
+	if code, out := runCLI(t, "-out", lib, "-reorganize"); code != ExitOK || !strings.Contains(out, "Moved 0 folder(s)") {
+		t.Errorf("second reorganize: exit %d\n%s", code, out)
+	}
+	code, out = runCLI(t, "-out", lib, zip)
+	if code != ExitOK || strings.Contains(out, "warning: the library has") {
+		t.Errorf("re-import: exit %d\n%s", code, out)
+	}
+	if got := mediaIn(t, lib); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("re-import after reorganizing added files:\n%s", strings.Join(got, "\n"))
 	}
 }

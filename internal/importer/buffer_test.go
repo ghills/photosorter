@@ -16,7 +16,7 @@ func TestBuffering_ReadsSmallFileOnce(t *testing.T) {
 	if got := f.opens.Load(); got != 1 {
 		t.Errorf("source opened %d times, want 1 (hash, EXIF and copy should share one read)", got)
 	}
-	if got := readFile(t, im.opts.Library, "2023-01-01", "IMG_20230101.jpg"); got != "small photo" {
+	if got := readFile(t, im.opts.Library, "2023/2023-01-01", "IMG_20230101.jpg"); got != "small photo" {
 		t.Errorf("output = %q", got)
 	}
 }
@@ -30,7 +30,7 @@ func TestBuffering_DisabledOrTooLargeStreams(t *testing.T) {
 			if got := f.opens.Load(); got < 3 {
 				t.Errorf("source opened %d times, want at least 3 when streaming", got)
 			}
-			if got := readFile(t, im.opts.Library, "2023-01-01", "IMG_20230101.jpg"); got != "small photo" {
+			if got := readFile(t, im.opts.Library, "2023/2023-01-01", "IMG_20230101.jpg"); got != "small photo" {
 				t.Errorf("output = %q", got)
 			}
 		})
@@ -45,7 +45,7 @@ func TestBuffering_WrongSizeFallsBackToStreaming(t *testing.T) {
 	f := &memFile{name: "IMG_20230101.jpg", content: content, size: 8}
 
 	run(t, im, sourceOf(f))
-	if got := readFile(t, im.opts.Library, "2023-01-01", "IMG_20230101.jpg"); got != string(content) {
+	if got := readFile(t, im.opts.Library, "2023/2023-01-01", "IMG_20230101.jpg"); got != string(content) {
 		t.Errorf("output differs from source (len %d vs %d)", len(got), len(content))
 	}
 }

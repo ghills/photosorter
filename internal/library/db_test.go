@@ -286,3 +286,26 @@ func TestDB_PruneReadOnlyWritesNothing(t *testing.T) {
 		t.Errorf("read-only prune changed the database: count = %d, want 2", n)
 	}
 }
+
+func TestDB_SetFilename(t *testing.T) {
+	dir := t.TempDir()
+	db := openDB(t, dir)
+	if err := db.Record("h1", "a.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	db = openDB(t, dir)
+	if err := db.SetFilename("h1", "a_1.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetFilename("missing", "x.jpg"); err != nil {
+		t.Fatal(err)
+	}
+	var name string
+	if err := db.sql.QueryRow("SELECT filename FROM processed_hashes WHERE hash = 'h1'").Scan(&name); err != nil || name != "a_1.jpg" {
+		t.Errorf("filename = %q, %v; want a_1.jpg", name, err)
+	}
+	if n := count(t, db); n != 1 {
+		t.Errorf("count = %d, want 1", n)
+	}
+}

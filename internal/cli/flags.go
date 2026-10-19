@@ -74,6 +74,7 @@ func newFlagSet(cfg *config.Config, configPath *string, output io.Writer) *flag.
 
 	fs.BoolVar(&cfg.Sync, "sync", cfg.Sync, "Hash every file already in the library before importing")
 	fs.BoolVar(&cfg.Prune, "prune", cfg.Prune, "Sync the library, then forget cached hashes of files no longer in it so they can be imported again")
+	fs.BoolVar(&cfg.Reorganize, "reorganize", cfg.Reorganize, "Move dated folders at the top of the library into year folders, e.g. 2023-05-14/ to 2023/2023-05-14/")
 	fs.BoolVar(&cfg.NoSync, "no-sync", cfg.NoSync, "Never sync the library automatically")
 	fs.BoolVar(&cfg.NoSync, "nosync", cfg.NoSync, "Deprecated spelling of -no-sync")
 	fs.BoolVar(&cfg.DryRun, "dry-run", cfg.DryRun, "Show what would happen without writing anything")
@@ -103,6 +104,7 @@ Usage:
   photosorter -out <library> [flags] [takeout.zip | folder ...]
   photosorter -out <library> -sync
   photosorter -out <library> -prune
+  photosorter -out <library> -reorganize
 
 Examples:
   photosorter -out ~/Photos takeout-*.zip

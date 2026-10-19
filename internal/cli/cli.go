@@ -1,7 +1,8 @@
 // Package cli is PhotoSorter's command-line front end. It turns arguments and the
 // config file into settings, then drives one run:
 //
-//	open inputs → open library database → sync library if needed → import → report
+//	open inputs → open library database → reorganize if asked → sync library if needed
+//	→ import → report
 //
 // Status messages go to stdout; warnings, errors and progress bars go to stderr. A
 // detailed per-file log is written to the library folder.
@@ -16,6 +17,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"photosorter/internal/config"
@@ -55,6 +57,10 @@ type runner struct {
 	cfg            config.Config
 	stdout, stderr io.Writer
 	filter         media.Filter
+
+	// log is this run's detail log, opened on first use by logger.
+	log      *log.Logger
+	closeLog func()
 }
 
 func (r *runner) printf(format string, args ...any) { fmt.Fprintf(r.stdout, format, args...) }
@@ -99,6 +105,17 @@ func (r *runner) run(ctx context.Context) (code int) {
 		}
 	}()
 
+	defer func() {
+		if r.closeLog != nil {
+			r.closeLog()
+		}
+	}()
+
+	if r.cfg.Reorganize {
+		if code := r.reorganize(ctx, db); code != ExitOK {
+			return code
+		}
+	}
 	libraryFiles, code, ok := r.syncLibrary(ctx, db)
 	if !ok {
 		return code
@@ -199,13 +216,95 @@ func (r *runner) reportPrune(res library.SyncResult) {
 	}
 }
 
+// reorganize moves the library's top-level dated folders into year folders and
+// reports what it did. It returns ExitOK if the run should go on.
+func (r *runner) reorganize(ctx context.Context, db *library.DB) int {
+	logger := r.logger()
+	loc, _ := r.cfg.Location() // validated by parseArgs
+	// Only the first component of a nested folder setting sits at the top level.
+	top := func(dir string) string { return strings.SplitN(dir, "/", 2)[0] }
+	r.printf("Reorganizing %s into year folders...\n", r.cfg.Library)
+	res, err := library.Reorganize(ctx, r.cfg.Library, db, library.ReorganizeOptions{
+		Filter:   r.filter,
+		Skip:     []string{top(r.cfg.Layout.UnknownDir), top(r.cfg.Layout.AlbumsDir)},
+		Location: loc,
+		Workers:  r.cfg.Workers,
+		DryRun:   r.cfg.DryRun,
+		Progress: r.stderr,
+	})
+
+	would := func(done, planned string) string {
+		if r.cfg.DryRun {
+			return planned
+		}
+		return done
+	}
+	for _, m := range res.Moved {
+		how := "moved"
+		if m.Merged {
+			how = "merged"
+		}
+		logger.Printf("REORGANIZE %s: %s -> %s", how, m.From, m.To)
+	}
+	for _, m := range res.Renamed {
+		logger.Printf("REORGANIZE renamed (name taken): %s -> %s", m.From, m.To)
+	}
+	for _, p := range res.Duplicates {
+		logger.Printf("REORGANIZE removed duplicate: %s", p)
+	}
+	skips := make([]string, len(res.Skipped))
+	for i, s := range res.Skipped {
+		skips[i] = fmt.Sprintf("%s (%s)", s.Dir, s.Reason)
+		logger.Printf("REORGANIZE skipped: %s", skips[i])
+	}
+	for _, f := range res.Failed {
+		logger.Printf("REORGANIZE failed: %s", f)
+	}
+
+	switch {
+	case errors.Is(err, context.Canceled):
+		r.printf("Interrupted while reorganizing. Run again to continue.\n")
+		return ExitInterrupted
+	case err != nil:
+		r.errorf("reorganize failed: %v", err)
+		return ExitFailure
+	}
+
+	merged := 0
+	for i, m := range res.Moved {
+		if m.Merged {
+			merged++
+		}
+		if i < maxListed {
+			r.printf("  %s -> %s\n", m.From, m.To)
+		} else if i == maxListed {
+			r.printf("  ... and %d more\n", len(res.Moved)-maxListed)
+		}
+	}
+	r.printf("%s %d folder(s) into year folders", would("Moved", "Would move"), len(res.Moved))
+	if merged > 0 {
+		r.printf(" (%d merged into existing folders)", merged)
+	}
+	r.printf(".\n")
+	if n := len(res.Duplicates); n > 0 {
+		r.printf("%s %d file(s) already in the target folder.\n", would("Removed", "Would remove"), n)
+	}
+	if n := len(res.Renamed); n > 0 {
+		r.printf("%s %d file(s) whose name was taken in the target folder.\n", would("Renamed", "Would rename"), n)
+	}
+	r.listPaths("left in place", skips)
+	if len(res.Failed) > 0 {
+		r.listPaths("could not move", res.Failed)
+		return ExitFailure
+	}
+	return ExitOK
+}
+
 // importAll runs the importer over every source and prints its report. libraryFiles
 // is the library's media file count before the import; the files imported are added
 // to it in the database.
 func (r *runner) importAll(ctx context.Context, db *library.DB, sources []source.Source, libraryFiles int) int {
-	logger, closeLog := r.openLog()
-	defer closeLog()
-
+	logger := r.logger()
 	loc, _ := r.cfg.Location() // validated by parseArgs
 	im := importer.New(db, importer.Options{
 		Library: r.cfg.Library,
@@ -246,6 +345,14 @@ func (r *runner) importAll(ctx context.Context, db *library.DB, sources []source
 		r.errorf("%v", err)
 		return ExitFailure
 	}
+}
+
+// logger returns this run's detail log, opening it on first use.
+func (r *runner) logger() *log.Logger {
+	if r.log == nil {
+		r.log, r.closeLog = r.openLog()
+	}
+	return r.log
 }
 
 // openLog creates this run's detail log in the library folder, or for a dry run in the
