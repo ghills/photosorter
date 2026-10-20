@@ -1,6 +1,6 @@
 # PhotoSorter
 
-PhotoSorter imports [Google Takeout](https://takeout.google.com/) exports of Google Photos into a plain folder-based photo library on your own disk.
+PhotoSorter imports [Google Takeout](https://takeout.google.com/) exports of Google Photos into a plain folder-based photo library on your own disk. It also takes any other folder or zip of photos, and lets you give a date or a name to batches you add by hand.
 
 - **No duplicates.** Every file in the library is identified by a hash of its content. Anything already in the library is skipped, whether it was imported before, came from an earlier Takeout, or was put there by hand.
 - **Correct dates.** Each file goes into a dated folder based on its EXIF data, Google's JSON sidecar files, or failing those, the date in its file name. Google often strips EXIF from exported media, so the sidecars matter.
@@ -55,6 +55,52 @@ See what would happen first, without writing anything:
 
 Pass every part of a multi-part export in the same run. A sidecar sometimes ends up in a different zip from the photo it describes, and PhotoSorter can only pair them when it sees both.
 
+## Common recipes
+
+`photosorter -h` prints these too. Add `-dry-run` to any of them to see what would happen first.
+
+| To | Run |
+|---|---|
+| Import a Google Takeout export (all parts together) | `photosorter -out ~/Photos ~/Downloads/takeout-*.zip` |
+| Add a folder or zip, dated from the files themselves | `photosorter -out ~/Photos ~/Desktop/phone-backup` |
+| Add photos you know the date of | `photosorter -out ~/Photos -date 2019-07-04 ~/Desktop/fireworks` |
+| ...and name their folder | `photosorter -out ~/Photos -date 2019-07-04 -event Fireworks ~/Desktop/fireworks` |
+| Add photos when you only know the year or month | `photosorter -out ~/Photos -date 2004-08 -event "Lake house" ~/Scans/box2` |
+| Date only the files that have no date of their own | `photosorter -out ~/Photos -fallback-date 1998 ~/Scans/mixed` |
+| Keep a batch together as an album | `photosorter -out ~/Photos -album Wedding ~/Downloads/wedding-photos.zip` |
+| Register files you copied into the library by hand | `photosorter -out ~/Photos -sync` |
+| Let deleted files be imported again | `photosorter -out ~/Photos -prune` |
+| Move old `2023-05-14/` folders into year folders | `photosorter -out ~/Photos -reorganize` |
+
+## Adding photos by hand
+
+Any folder or zip works as an input, not just Takeout. Files are dated and de-duplicated the same way. Four flags help with batches you put together yourself, such as scans, a friend's photos, or a camera whose clock was wrong. They apply to one run only, so they can't be set in the config file.
+
+| Flag | Effect |
+|---|---|
+| `-date YYYY[-MM[-DD]]` | Every file in the run gets this date, even one that has its own. The run reports how many files had a different date of their own, and the log lists them |
+| `-fallback-date YYYY[-MM[-DD]]` | Only files with no date of their own get this date, instead of going to `Unknown_Date/` |
+| `-event <name>` | Adds a name to the dated folders |
+| `-album <name>` | Puts everything in `Albums/<name>/`, whatever its date |
+
+Use either `-date` or `-fallback-date`, and either `-event` or `-album`. You can give just a year, or a year and month. With the default layout, files land here:
+
+| Flags | Folder |
+|---|---|
+| `-date 2019-07-04` | `2019/2019-07-04/` |
+| `-date 2019-07` | `2019/2019-07/` |
+| `-date 2019` | `2019/` |
+| `-date 2019-07-04 -event Fireworks` | `2019/2019-07-04 Fireworks/` |
+| `-date 2019-07 -event "Road trip"` | `2019/2019-07 Road trip/` |
+| `-date 2019 -event Scans` | `2019/2019 Scans/` |
+| `-event Hawaii` | each file's own date folder plus the name, e.g. `2023/2023-05-14 Hawaii/` |
+| `-fallback-date 1998` | dated files as usual; undated files in `1998/` |
+| `-album "Grandma's box"` | `Albums/Grandma's box/` |
+
+With a custom `-date-format`, a partial date uses the parts of the format it can fill in, then the date itself. For example, `2006/01` with `-date 2019-07` gives `2019/07/`. Event and album names must work as folder names on Windows, macOS and Linux, so they can't contain `/ \ : * ? " < > |`.
+
+Files already in the library are still skipped. Importing the same photos again with a different `-date` won't move them.
+
 ## The resulting library
 
 With the default settings:
@@ -103,7 +149,7 @@ For each file, PhotoSorter uses the first of these that works:
 3. **JSON sidecar `creationTime`**: the upload time. This is a last resort before guessing.
 4. **File name**: patterns such as `IMG_20230514_…`, `VID-2023-05-14…`, `Screenshot_2023-05-14…` and `WhatsApp Image 2023-05-14…`.
 
-If none of them works, the file goes to `Unknown_Date/`.
+If none of them works, the file goes to `Unknown_Date/`, or gets the `-fallback-date` if you gave one. A `-date` replaces all of these (see [Adding photos by hand](#adding-photos-by-hand)).
 
 Sidecar timestamps are absolute instants, so the day they fall on depends on the time zone. PhotoSorter uses the machine's zone unless you pass `-tz`. EXIF times are wall-clock times and are used exactly as recorded.
 
@@ -131,7 +177,7 @@ The database only knows about files PhotoSorter imported. If you add files to th
 ./photosorter -out ~/Pictures/Library -sync
 ```
 
-A sync also runs on its own when the library contains media but the database is empty, for example on the first run against an existing library. If the library has more media files than it held after the last sync or import, PhotoSorter warns you. Pass `-no-sync` to turn off the automatic sync.
+A sync also runs on its own when the library contains media but the database is empty, for example on the first run against an existing library. It also runs when the library has more media files than it held after the last sync or import, which usually means files were copied in by hand. Without that sync, the same photo could be imported a second time. Pass `-no-sync` to turn off the automatic sync.
 
 Deleting a file from the library does not remove its hash, so the same content is still skipped by later imports. That keeps photos you deleted on purpose from coming back. To make PhotoSorter forget files that are gone, run a **prune**. It syncs the library, then removes every cached hash whose content is no longer in it:
 
@@ -153,7 +199,11 @@ Positional arguments are inputs: folders are imported like `-in`, and anything e
 | --- | --- | --- |
 | `-out <folder>` | *(required)* | Library folder to import into |
 | `-in <folder>` | | Import from a folder, such as an extracted Takeout. Repeatable |
-| `-zip <file or glob>` | | Import from a Takeout zip, e.g. `"takeout-*.zip"`. Repeatable |
+| `-zip <file or glob>` | | Import from a zip, e.g. `"takeout-*.zip"`. Repeatable |
+| `-date <YYYY[-MM[-DD]]>` | | Give every file in this run this date (see [Adding photos by hand](#adding-photos-by-hand)). Command line only |
+| `-fallback-date <YYYY[-MM[-DD]]>` | | Give this date only to files with no date of their own. Command line only |
+| `-event <name>` | | Add a name to the dated folders: `2019/2019-07-04 Fireworks/`. Command line only |
+| `-album <name>` | | Put everything from this run in `Albums/<name>/`. Command line only |
 | `-config <file>` | `<out>/photosorter.toml` | Load settings from this TOML file |
 | `-sync` | off | Hash the existing library before importing |
 | `-prune` | off | Sync, then forget cached hashes of files no longer in the library so they can be imported again |
@@ -183,7 +233,7 @@ The built-in extensions are `jpg jpeg png gif webp heic bmp tiff tif mp4 mov avi
 
 ## Configuration
 
-Every flag can also be set in a TOML file. Put it in the library as `photosorter.toml` to have it picked up automatically, or point to it with `-config`. Settings resolve in this order, with later ones winning:
+Every flag except `-date`, `-fallback-date`, `-event` and `-album` can also be set in a TOML file. Put it in the library as `photosorter.toml` to have it picked up automatically, or point to it with `-config`. Settings resolve in this order, with later ones winning:
 
 **built-in defaults → config file → flags given on the command line**
 

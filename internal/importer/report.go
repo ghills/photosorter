@@ -14,6 +14,10 @@ type Report struct {
 	// Imported counts imported files by how their date was found.
 	Imported map[DateSource]int
 
+	// DateConflicts counts files filed under a forced date that have a different date
+	// of their own (EXIF, sidecar or file name). The log lists them.
+	DateConflicts int
+
 	Duplicates  int // already in the library (or earlier in this run)
 	ShortVideos int // skipped by the short-video rule
 	Failed      int // could not be imported; see the log
@@ -37,7 +41,12 @@ var dateLabels = map[DateSource]string{
 	DateFromJSONCreation: "dated from JSON (created)",
 	DateFromFilename:     "dated from file name",
 	DateUnknown:          "date unknown",
+	DateForced:           "dated by -date",
+	DateFallback:         "dated by -fallback-date",
 }
+
+// optionalSources are only printed when they were used.
+var optionalSources = map[DateSource]bool{DateForced: true, DateFallback: true}
 
 // Print writes the report as an aligned table.
 func (r Report) Print(w io.Writer) {
@@ -49,7 +58,13 @@ func (r Report) Print(w io.Writer) {
 	}
 	row("Imported", r.TotalImported())
 	for _, src := range dateSources {
+		if optionalSources[src] && r.Imported[src] == 0 {
+			continue
+		}
 		row("  "+dateLabels[src], r.Imported[src])
+		if src == DateForced && r.DateConflicts > 0 {
+			row("    own date differed (log)", r.DateConflicts)
+		}
 	}
 	row("Duplicates skipped", r.Duplicates)
 	row("Short videos skipped", r.ShortVideos)

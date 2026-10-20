@@ -82,6 +82,82 @@ type Config struct {
 
 	Layout Layout `toml:"layout"`
 	Media  Media  `toml:"media"`
+
+	// Manual describes the batch being imported. It can only be set on the command
+	// line, so a value left in the config file can't mis-file a later import.
+	Manual Manual `toml:"-"`
+}
+
+// Manual holds the settings for importing a hand-picked batch of media.
+type Manual struct {
+	// Date files every media file under this date, YYYY[-MM[-DD]] (-date).
+	Date string
+
+	// FallbackDate dates files whose own date can't be found (-fallback-date).
+	FallbackDate string
+
+	// Event is appended to the name of every dated folder (-event).
+	Event string
+
+	// Album files everything under Layout.AlbumsDir/<Album> (-album).
+	Album string
+}
+
+// manualKeys are the command-line-only settings, for a helpful error if they appear in
+// a config file.
+var manualKeys = map[string]bool{"date": true, "fallback_date": true, "event": true, "album": true}
+
+// IsSet reports whether any manual-import setting is given.
+func (m Manual) IsSet() bool { return m != (Manual{}) }
+
+// Dates parses Date and FallbackDate; each is nil if not set.
+func (m Manual) Dates() (forced, fallback *importer.GivenDate, err error) {
+	parse := func(flag, s string) (*importer.GivenDate, error) {
+		if s == "" {
+			return nil, nil
+		}
+		g, err := importer.ParseGivenDate(s)
+		if err != nil {
+			return nil, fmt.Errorf("-%s: %w", flag, err)
+		}
+		return &g, nil
+	}
+	forced, err1 := parse("date", m.Date)
+	fallback, err2 := parse("fallback-date", m.FallbackDate)
+	return forced, fallback, errors.Join(err1, err2)
+}
+
+func (m Manual) validate() error {
+	var errs []error
+	if _, _, err := m.Dates(); err != nil {
+		errs = append(errs, err)
+	}
+	if m.Date != "" && m.FallbackDate != "" {
+		errs = append(errs, errors.New("use either -date or -fallback-date, not both: -date replaces every file's date, -fallback-date only fills in missing ones"))
+	}
+	if m.Album != "" && m.Event != "" {
+		errs = append(errs, errors.New("use either -album or -event, not both: -album puts everything in one album folder, -event names the dated folders"))
+	}
+	for flag, name := range map[string]string{"event": m.Event, "album": m.Album} {
+		if name != "" && !isFolderName(name) {
+			errs = append(errs, fmt.Errorf("-%s %q must be usable as a single folder name (none of / \\ : * ? \" < > |, not . or .., no leading or trailing space)", flag, name))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// isFolderName reports whether name is safe as one folder name on any common
+// filesystem, so the library stays portable between Windows, macOS and Linux.
+func isFolderName(name string) bool {
+	if name == "." || name == ".." || strings.TrimSpace(name) != name || strings.HasSuffix(name, ".") {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || strings.ContainsRune(`/\:*?"<>|`, r) {
+			return false
+		}
+	}
+	return name != "" && filepath.IsLocal(name)
 }
 
 // Layout controls the library's folder structure.
@@ -142,6 +218,9 @@ func LoadFile(path string, cfg *Config) error {
 		keys := make([]string, len(undecoded))
 		for i, k := range undecoded {
 			keys[i] = k.String()
+			if manualKeys[keys[i]] {
+				return fmt.Errorf("config file %s: %s can only be given on the command line, since it applies to one import", path, keys[i])
+			}
 		}
 		return fmt.Errorf("config file %s: unknown setting(s): %s", path, strings.Join(keys, ", "))
 	}
@@ -193,8 +272,16 @@ func (c Config) Validate() error {
 	if c.Library == "" {
 		add("an output library folder is required (-out)")
 	}
-	if len(c.Folders) == 0 && len(c.Zips) == 0 && !c.Sync && !c.Prune && !c.Reorganize {
+	hasInput := len(c.Folders) > 0 || len(c.Zips) > 0
+	if !hasInput && !c.Sync && !c.Prune && !c.Reorganize {
 		add("nothing to do: give an input (-in, -zip), -sync, -prune or -reorganize")
+	}
+	if c.Manual.IsSet() && !hasInput {
+		add("-date, -fallback-date, -event and -album need something to import: give a folder or zip")
+	}
+	errs = append(errs, c.Manual.validate())
+	if c.Manual.Album != "" && c.Layout.Albums != AlbumsFolder && !isRelativeDir(c.Layout.AlbumsDir) {
+		add("albums folder %q must be a relative folder path", c.Layout.AlbumsDir)
 	}
 	if c.Workers < 1 {
 		add("workers must be at least 1, got %d", c.Workers)

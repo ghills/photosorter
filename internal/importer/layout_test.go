@@ -32,7 +32,7 @@ func TestLayout_Dir(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.layout.Dir(tc.path, when, tc.src); got != filepath.FromSlash(tc.want) {
+			if got := tc.layout.Dir(tc.path, when, DayPrecision, tc.src); got != filepath.FromSlash(tc.want) {
 				t.Errorf("Dir = %q, want %q", got, tc.want)
 			}
 		})

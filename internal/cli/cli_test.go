@@ -199,7 +199,7 @@ func TestRun_DryRunSyncRecordsNothing(t *testing.T) {
 }
 
 // Duplicate content inside the library shares one hash; that alone must not trigger
-// the "files added by other means" warning.
+// the automatic sync for files added by other means.
 func TestRun_NoSyncWarningForDuplicateContent(t *testing.T) {
 	dir := t.TempDir()
 	lib := filepath.Join(dir, "Library")
@@ -209,15 +209,15 @@ func TestRun_NoSyncWarningForDuplicateContent(t *testing.T) {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	code, out := runCLI(t, "-out", lib, takeoutFixture(t, dir))
-	if code != ExitOK || strings.Contains(out, "warning: the library has") {
+	if code != ExitOK || strings.Contains(out, "(added by hand?)") {
 		t.Errorf("import: exit %d\n%s", code, out)
 	}
-	if _, out := runCLI(t, "-out", lib, takeoutFixture(t, dir)); strings.Contains(out, "warning: the library has") {
-		t.Errorf("false warning after import:\n%s", out)
+	if _, out := runCLI(t, "-out", lib, takeoutFixture(t, dir)); strings.Contains(out, "(added by hand?)") {
+		t.Errorf("needless sync after import:\n%s", out)
 	}
 	writeFile(t, filepath.Join(lib, "c", "new.jpg"), "added by hand")
-	if _, out := runCLI(t, "-out", lib, takeoutFixture(t, dir)); !strings.Contains(out, "warning: the library has") {
-		t.Errorf("no warning for a file added by other means:\n%s", out)
+	if _, out := runCLI(t, "-out", lib, takeoutFixture(t, dir)); !strings.Contains(out, "(added by hand?)") {
+		t.Errorf("no sync for a file added by other means:\n%s", out)
 	}
 }
 
@@ -354,7 +354,7 @@ func TestRun_Reorganize(t *testing.T) {
 		t.Errorf("second reorganize: exit %d\n%s", code, out)
 	}
 	code, out = runCLI(t, "-out", lib, zip)
-	if code != ExitOK || strings.Contains(out, "warning: the library has") {
+	if code != ExitOK || strings.Contains(out, "(added by hand?)") {
 		t.Errorf("re-import: exit %d\n%s", code, out)
 	}
 	if got := mediaIn(t, lib); strings.Join(got, "\n") != strings.Join(want, "\n") {

@@ -4,6 +4,9 @@
 # picked up automatically, or pass any path with -config. Every key is optional:
 # anything left out keeps its default (shown below). Command-line flags override
 # values set here. Relative paths are relative to this file's folder.
+#
+# -date, -fallback-date, -event and -album describe a single import, so they can
+# only be given on the command line.
 
 # Library folder to import into (-out). Usually given on the command line instead.
 # out = "/Users/me/Pictures/Library"

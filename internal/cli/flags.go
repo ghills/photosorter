@@ -70,7 +70,12 @@ func newFlagSet(cfg *config.Config, configPath *string, output io.Writer) *flag.
 
 	fs.StringVar(&cfg.Library, "out", cfg.Library, "Library `folder` to import into (required)")
 	fs.Var(newListFlag(&cfg.Folders, false), "in", "Import from this `folder` (repeatable)")
-	fs.Var(newListFlag(&cfg.Zips, false), "zip", "Import from this Takeout zip `file` or glob pattern (repeatable)")
+	fs.Var(newListFlag(&cfg.Zips, false), "zip", "Import from this zip `file` or glob pattern, e.g. \"takeout-*.zip\" (repeatable)")
+
+	fs.StringVar(&cfg.Manual.Date, "date", "", "Give every file in this run the date `YYYY[-MM[-DD]]`, even files with a date of their own")
+	fs.StringVar(&cfg.Manual.FallbackDate, "fallback-date", "", "Give the date `YYYY[-MM[-DD]]` only to files whose own date can't be found, instead of putting them in the unknown-date folder")
+	fs.StringVar(&cfg.Manual.Event, "event", "", "Add this `name` to the dated folders, e.g. 2019/2019-07-04 Fireworks/")
+	fs.StringVar(&cfg.Manual.Album, "album", "", "Put everything from this run in one album, e.g. -album Wedding puts it in Albums/Wedding/")
 
 	fs.BoolVar(&cfg.Sync, "sync", cfg.Sync, "Hash every file already in the library before importing")
 	fs.BoolVar(&cfg.Prune, "prune", cfg.Prune, "Sync the library, then forget cached hashes of files no longer in it so they can be imported again")
@@ -94,35 +99,92 @@ func newFlagSet(cfg *config.Config, configPath *string, output io.Writer) *flag.
 	return fs
 }
 
-// usage prints the help text, hiding deprecated flags.
-func usage(fs *flag.FlagSet) {
-	w := fs.Output()
-	fmt.Fprint(w, `PhotoSorter imports Google Takeout archives into a local photo library,
-skipping media the library already has and filing the rest by date or album.
+// usageIntro is the start of the help text: what the program does, then recipes for
+// the common tasks, since those are what's hard to remember between uses.
+const usageIntro = `PhotoSorter copies photos and videos into a library folder sorted by date,
+skipping anything the library already has. It reads Google Takeout zips directly,
+and any other folder or zip of photos too.
 
 Usage:
-  photosorter -out <library> [flags] [takeout.zip | folder ...]
-  photosorter -out <library> -sync
-  photosorter -out <library> -prune
-  photosorter -out <library> -reorganize
+  photosorter -out <library> [flags] [zip | folder ...]
 
-Examples:
-  photosorter -out ~/Photos takeout-*.zip
-  photosorter -out ~/Photos -in ~/Downloads/Takeout -date-format 2006/01
-  photosorter -out ~/Photos -dry-run takeout-001.zip
+Common tasks (add -dry-run to any of them to see what would happen first):
 
-Flags:
-`)
-	// Copy the visible flags into a fresh set so PrintDefaults skips deprecated ones.
-	visible := flag.NewFlagSet("", flag.ContinueOnError)
-	visible.SetOutput(w)
-	fs.VisitAll(func(f *flag.Flag) {
-		if _, hidden := deprecatedFlags[f.Name]; !hidden {
-			visible.Var(f.Value, f.Name, f.Usage)
+  Import a Google Takeout export. Pass every part of it together:
+    photosorter -out ~/Photos ~/Downloads/takeout-*.zip
+
+  Add a folder or zip of photos, dated from the files themselves (EXIF, file name):
+    photosorter -out ~/Photos ~/Desktop/phone-backup
+
+  Add photos you know the date of. Every file gets this date, even if it has its own:
+    photosorter -out ~/Photos -date 2019-07-04 ~/Desktop/fireworks
+
+  ...and name the folder (-> 2019/2019-07-04 Fireworks/):
+    photosorter -out ~/Photos -date 2019-07-04 -event Fireworks ~/Desktop/fireworks
+
+  Only know the year or month (-> 2004/, or 2004/2004-08 Lake house/):
+    photosorter -out ~/Photos -date 2004 ~/Scans/box1
+    photosorter -out ~/Photos -date 2004-08 -event "Lake house" ~/Scans/box2
+
+  Keep each file's own date, but date the ones that have none (instead of Unknown_Date/):
+    photosorter -out ~/Photos -fallback-date 1998 ~/Scans/mixed
+
+  Keep a batch together as an album (-> Albums/Wedding/):
+    photosorter -out ~/Photos -album Wedding ~/Downloads/wedding-photos.zip
+
+  After copying files into the library by hand, so they count as already imported:
+    photosorter -out ~/Photos -sync
+
+  After deleting files from the library, so they can be imported again:
+    photosorter -out ~/Photos -prune
+
+  Move old top-level 2023-05-14/ folders into year folders (2023/2023-05-14/):
+    photosorter -out ~/Photos -reorganize
+`
+
+// flagGroups orders the flags in the help text. Every visible flag must be in one
+// group (a test checks this).
+var flagGroups = []struct {
+	title string
+	flags []string
+}{
+	{"Inputs (folders and zips can also be given without -in/-zip)", []string{"out", "in", "zip"}},
+	{"Manual import (this run only; can't be set in the config file)", []string{"date", "fallback-date", "event", "album"}},
+	{"Library maintenance", []string{"dry-run", "sync", "prune", "reorganize", "no-sync"}},
+	{"Dates and folders", []string{"tz", "date-format", "unknown-dir", "albums", "albums-dir"}},
+	{"Which files", []string{"include-ext", "exclude-ext", "skip-short-videos"}},
+	{"Performance", []string{"workers", "max-buffer-mb"}},
+	{"Configuration", []string{"config"}},
+}
+
+// usage prints the help text: usageIntro, then the flags by group. Deprecated flags
+// are hidden.
+func usage(fs *flag.FlagSet) {
+	w := fs.Output()
+	fmt.Fprint(w, usageIntro)
+	for _, g := range flagGroups {
+		fmt.Fprintf(w, "\n%s:\n", g.title)
+		for _, name := range g.flags {
+			if f := fs.Lookup(name); f != nil {
+				printFlag(w, f)
+			}
 		}
-	})
-	visible.PrintDefaults()
-	fmt.Fprintf(w, "\nAll flags can also be set in a config file; see photosorter.example.toml.\n")
+	}
+	fmt.Fprintf(w, "\nAny flag outside \"Manual import\" can also be set in <library>/%s;\nsee photosorter.example.toml. Full guide: https://github.com/ghills/photosorter#readme\n", config.FileName)
+}
+
+// printFlag writes one flag's help the way flag.PrintDefaults does.
+func printFlag(w io.Writer, f *flag.Flag) {
+	arg, text := flag.UnquoteUsage(f)
+	line := "  -" + f.Name
+	if arg != "" {
+		line += " " + arg
+	}
+	line += "\n    \t" + strings.ReplaceAll(text, "\n", "\n    \t")
+	if def := f.DefValue; def != "" && def != "false" && def != "0" {
+		line += " (default " + def + ")"
+	}
+	fmt.Fprintln(w, line)
 }
 
 // listFlag is a repeatable flag that collects values into a slice. The first use on
