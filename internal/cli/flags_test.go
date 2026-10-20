@@ -138,7 +138,7 @@ func TestParseArgs_Help(t *testing.T) {
 	if !errors.Is(err, flag.ErrHelp) {
 		t.Fatalf("err = %v, want flag.ErrHelp", err)
 	}
-	for _, want := range []string{"Usage:", "Examples:", "-out", "-no-sync", "-date-format", "photosorter.example.toml"} {
+	for _, want := range []string{"Usage:", "Common tasks", "-date 2019-07-04 -event Fireworks", "-fallback-date 1998", "-album Wedding", "-date YYYY[-MM[-DD]]", "-out", "-no-sync", "-date-format", "photosorter.example.toml"} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("help text missing %q", want)
 		}

@@ -150,7 +150,7 @@ func (r *runner) syncLibrary(ctx context.Context, db *library.DB) (libraryFiles,
 		libraryFiles = tracked
 	}
 
-	forced := r.cfg.Sync || r.cfg.Prune
+	forced := r.cfg.Sync || r.cfg.Rehash || r.cfg.Prune
 	if !forced && r.cfg.NoSync {
 		return libraryFiles, ExitOK, true
 	}
@@ -166,7 +166,8 @@ func (r *runner) syncLibrary(ctx context.Context, db *library.DB) (libraryFiles,
 			r.printf("Found %d media files but an empty database; syncing the library first.\n", onDisk)
 			needed = true
 		case onDisk > libraryFiles:
-			fmt.Fprintf(r.stderr, "warning: the library has %d media files but the database knows of %d. Run with -sync if files were added by other means.\n", onDisk, libraryFiles)
+			r.printf("The library has %d media files but the database knows of %d (added by hand?); syncing the library first.\n", onDisk, libraryFiles)
+			needed = true
 		}
 	}
 	if !needed {
@@ -178,6 +179,7 @@ func (r *runner) syncLibrary(ctx context.Context, db *library.DB) (libraryFiles,
 		Workers:  r.cfg.Workers,
 		Progress: r.stderr,
 		Prune:    r.cfg.Prune,
+		Rehash:   r.cfg.Rehash,
 	})
 	r.listPaths("could not read", files.Unreadable)
 	r.listPaths("could not hash", res.Failed)
@@ -189,7 +191,7 @@ func (r *runner) syncLibrary(ctx context.Context, db *library.DB) (libraryFiles,
 		r.errorf("sync failed: %v", err)
 		return 0, ExitFailure, false
 	}
-	r.printf("Sync complete: %d files hashed.\n", res.Hashed)
+	r.printf("Sync complete: %d files hashed, %d unchanged since the last sync.\n", res.Hashed, res.Unchanged)
 	if r.cfg.Prune {
 		r.reportPrune(res)
 	}
@@ -305,7 +307,12 @@ func (r *runner) reorganize(ctx context.Context, db *library.DB) int {
 // to it in the database.
 func (r *runner) importAll(ctx context.Context, db *library.DB, sources []source.Source, libraryFiles int) int {
 	logger := r.logger()
-	loc, _ := r.cfg.Location() // validated by parseArgs
+	loc, _ := r.cfg.Location()                  // validated by parseArgs
+	forced, fallback, _ := r.cfg.Manual.Dates() // validated by parseArgs
+	if summary := r.manualSummary(); summary != "" {
+		r.printf("%s\n", summary)
+		logger.Print(summary)
+	}
 	im := importer.New(db, importer.Options{
 		Library: r.cfg.Library,
 		Layout: importer.Layout{
@@ -313,7 +320,11 @@ func (r *runner) importAll(ctx context.Context, db *library.DB, sources []source
 			UnknownDir: r.cfg.Layout.UnknownDir,
 			AlbumsDir:  r.cfg.Layout.AlbumsDir,
 			KeepAlbums: r.cfg.Layout.Albums == config.AlbumsFolder,
+			Album:      r.cfg.Manual.Album,
+			Event:      r.cfg.Manual.Event,
 		},
+		ForcedDate:     forced,
+		FallbackDate:   fallback,
 		Workers:        r.cfg.Workers,
 		BufferLimit:    r.cfg.BufferLimit(),
 		SkipVideosUpTo: r.cfg.ShortVideoLimit(),
@@ -345,6 +356,29 @@ func (r *runner) importAll(ctx context.Context, db *library.DB, sources []source
 		r.errorf("%v", err)
 		return ExitFailure
 	}
+}
+
+// manualSummary describes the manual-import settings in effect, or returns "" if
+// there are none, so the user can see what a run will do before it starts.
+func (r *runner) manualSummary() string {
+	m := r.cfg.Manual
+	var parts []string
+	switch {
+	case m.Date != "":
+		parts = append(parts, "every file dated "+m.Date)
+	case m.FallbackDate != "":
+		parts = append(parts, "files without a date of their own dated "+m.FallbackDate)
+	}
+	if m.Event != "" {
+		parts = append(parts, fmt.Sprintf("event %q", m.Event))
+	}
+	if m.Album != "" {
+		parts = append(parts, fmt.Sprintf("everything in album %q", m.Album))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "Manual import: " + strings.Join(parts, ", ") + "."
 }
 
 // logger returns this run's detail log, opening it on first use.

@@ -11,9 +11,10 @@
 //  3. Optionally skip very short videos, such as the clips behind motion photos.
 //     They are not recorded, so a lower threshold later can still import them.
 //  4. Work out when it was taken: EXIF, then the Takeout sidecar's photoTakenTime,
-//     then its creationTime, then a date in the file name.
-//  5. Choose a folder with [Layout]: an album folder, a date folder, or the
-//     unknown-date folder.
+//     then its creationTime, then a date in the file name. For a manual import, a
+//     forced date replaces all of these and a fallback date fills in when they fail.
+//  5. Choose a folder with [Layout]: an album folder, a date folder (optionally
+//     named after an event), or the unknown-date folder.
 //  6. Copy the file under a unique name, through a temp file so a failure never
 //     leaves a partial file behind, then record the hash.
 //

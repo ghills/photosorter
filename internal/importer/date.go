@@ -18,10 +18,50 @@ const (
 	DateFromJSONCreation DateSource = "json_creation"
 	DateFromFilename     DateSource = "filename"
 	DateUnknown          DateSource = "unknown"
+
+	// Dates given for a manual import: DateForced replaces every file's own date,
+	// DateFallback is used only where captureDate finds none.
+	DateForced   DateSource = "forced"
+	DateFallback DateSource = "fallback"
 )
 
 // dateSources lists every DateSource in priority order, for reporting.
-var dateSources = []DateSource{DateFromEXIF, DateFromJSONTaken, DateFromJSONCreation, DateFromFilename, DateUnknown}
+var dateSources = []DateSource{DateForced, DateFromEXIF, DateFromJSONTaken, DateFromJSONCreation, DateFromFilename, DateFallback, DateUnknown}
+
+// dated is a file's date as used to choose its folder.
+type dated struct {
+	t    time.Time
+	prec Precision
+	src  DateSource
+
+	// own and ownSrc are set when a forced date replaced a date the file has itself
+	// that falls outside the forced date. They are logged and counted.
+	own    time.Time
+	ownSrc DateSource
+}
+
+// conflicted reports whether a forced date overrode a different date of the file's own.
+func (d dated) conflicted() bool { return d.ownSrc != "" }
+
+// dateFile works out the date to file f under: the forced date if there is one,
+// otherwise the file's own date (see captureDate), otherwise the fallback date.
+func (im *Importer) dateFile(f source.File) dated {
+	if g := im.opts.ForcedDate; g != nil {
+		d := dated{t: g.Time, prec: g.Precision, src: DateForced}
+		// The file's own date is still read so that an unexpected one gets reported.
+		if own, src := captureDate(f, im.opts.Location); src != DateUnknown && !g.Contains(own) {
+			d.own, d.ownSrc = own, src
+		}
+		return d
+	}
+	t, src := captureDate(f, im.opts.Location)
+	if src == DateUnknown {
+		if g := im.opts.FallbackDate; g != nil {
+			return dated{t: g.Time, prec: g.Precision, src: DateFallback}
+		}
+	}
+	return dated{t: t, src: src}
+}
 
 // captureDate works out when f was taken. It tries, in order:
 //

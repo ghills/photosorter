@@ -43,6 +43,11 @@ type Options struct {
 	// time.Local. EXIF dates are wall-clock times and are used as recorded.
 	Location *time.Location
 
+	// ForcedDate, if set, files every media file under this date instead of its own
+	// (-date). FallbackDate, if set, is used only for files whose own date can't be
+	// found (-fallback-date). At most one should be set.
+	ForcedDate, FallbackDate *GivenDate
+
 	// Log receives one line per file. Nil discards it.
 	Log *log.Logger
 
@@ -184,8 +189,18 @@ func (im *Importer) handle(ctx context.Context, f source.File, t *tally) {
 		t.add(func(r *Report) { r.ShortVideos++ })
 		log.Printf("Short video skipped: %s", f.Name())
 	default:
-		t.add(func(r *Report) { r.Imported[res.date]++ })
-		log.Printf("Imported: %s -> %s (date from %s)", f.Name(), res.dest, res.date)
+		d := res.date
+		t.add(func(r *Report) {
+			r.Imported[d.src]++
+			if d.conflicted() {
+				r.DateConflicts++
+			}
+		})
+		if d.conflicted() {
+			log.Printf("Imported: %s -> %s (date forced; the file's own date is %s, from %s)", f.Name(), res.dest, d.own.Format("2006-01-02"), d.ownSrc)
+		} else {
+			log.Printf("Imported: %s -> %s (date from %s)", f.Name(), res.dest, d.src)
+		}
 	}
 }
 

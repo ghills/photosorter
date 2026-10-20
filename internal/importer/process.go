@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"photosorter/internal/library"
 	"photosorter/internal/media"
 	"photosorter/internal/source"
 )
@@ -22,7 +23,7 @@ const (
 // result describes one processed file. date and dest are set only when imported.
 type result struct {
 	outcome outcome
-	date    DateSource
+	date    dated
 	dest    string // path relative to the library
 }
 
@@ -57,14 +58,14 @@ func (im *Importer) importFile(ctx context.Context, f source.File) (result, erro
 	}
 
 	// 4 & 5. Date the file and choose its folder.
-	taken, dateSrc := captureDate(f, im.opts.Location)
-	dir := im.opts.Layout.Dir(f.Name(), taken, dateSrc)
+	date := im.dateFile(f)
+	dir := im.opts.Layout.Dir(f.Name(), date.t, date.prec, date.src)
 	rel := filepath.Join(dir, filepath.Base(f.Name()))
 
 	if im.opts.DryRun {
 		keepClaim = true
 		im.db.Keep(hash) // so identical files later in the run count as duplicates
-		return result{outcome: imported, date: dateSrc, dest: rel}, nil
+		return result{outcome: imported, date: date, dest: rel}, nil
 	}
 
 	// 6. Copy under a free name, then record the hash.
@@ -75,12 +76,18 @@ func (im *Importer) importFile(ctx context.Context, f source.File) (result, erro
 	if err != nil {
 		return result{}, err
 	}
-	if err := im.db.Record(hash, filepath.Base(written)); err != nil {
+	rel, _ = filepath.Rel(im.opts.Library, written)
+	// Remember where the file went, so a later sync needn't hash it again.
+	if state, statErr := library.StatFile(written, rel); statErr == nil {
+		err = im.db.RecordFile(hash, state)
+	} else {
+		err = im.db.Record(hash, filepath.Base(written))
+	}
+	if err != nil {
 		return result{}, err
 	}
 	keepClaim = true
-	rel, _ = filepath.Rel(im.opts.Library, written)
-	return result{outcome: imported, date: dateSrc, dest: rel}, nil
+	return result{outcome: imported, date: date, dest: rel}, nil
 }
 
 // maxDurationScan is how far into a non-seekable stream (a zip entry too large to

@@ -29,7 +29,9 @@ var errClosed = errors.New("library database is closed")
 // already present is never imported again.
 //
 // It also remembers how many media files the library held after the last sync or
-// import ([DB.LibraryFiles]), so files added by other means can be noticed.
+// import ([DB.LibraryFiles]), so files added by other means can be noticed, and the
+// path, size and modification time of each file it hashed ([DB.Files]), so a later
+// [Sync] only hashes files that are new or changed.
 //
 // Lookups are served from an in-memory set backed by SQLite. Writes are queued and
 // committed in batches by a background goroutine; [DB.Close] flushes the queue. If a
@@ -42,6 +44,7 @@ type DB struct {
 	sql        *sql.DB
 	existsStmt *sql.Stmt
 	insertStmt *sql.Stmt
+	fileStmt   *sql.Stmt // nil in a read-only database
 
 	// known holds every hash seen this run. The value is true once the hash is recorded,
 	// kept or confirmed in SQLite, or a *claim while a worker is still importing it.
@@ -73,6 +76,31 @@ type claim struct{ done chan struct{} }
 type record struct {
 	hash     string
 	filename string
+	file     *FileState // also stored in library_files if set
+}
+
+// FileState identifies one version of a file in the library: if a file at Path still
+// has this Size and ModTime, its content is taken to be unchanged.
+type FileState struct {
+	Path    string // relative to the library root, slash-separated
+	Size    int64
+	ModTime int64 // Unix nanoseconds
+}
+
+// StatFile returns the FileState of the file at path, which is relPath relative to
+// the library root.
+func StatFile(path, relPath string) (FileState, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return FileState{}, err
+	}
+	return FileState{Path: filepath.ToSlash(relPath), Size: info.Size(), ModTime: info.ModTime().UnixNano()}, nil
+}
+
+// StoredFile is what the database knows about a file in the library.
+type StoredFile struct {
+	FileState
+	Hash string
 }
 
 // Open opens (creating if needed) the database in the library folder dir. dir itself
@@ -114,7 +142,8 @@ func open(dsn string, readOnly, createSchema bool) (db *DB, err error) {
 	}()
 
 	// The schema is shared with earlier versions of PhotoSorter; keep it compatible.
-	// library_state is newer, so it may be missing from a database opened read-only.
+	// library_state and library_files are newer, so they may be missing from a database
+	// opened read-only.
 	if createSchema {
 		if _, err = sqlDB.Exec(`
 			CREATE TABLE IF NOT EXISTS processed_hashes (
@@ -125,6 +154,12 @@ func open(dsn string, readOnly, createSchema bool) (db *DB, err error) {
 			CREATE TABLE IF NOT EXISTS library_state (
 				id INTEGER PRIMARY KEY CHECK (id = 1),
 				files INTEGER NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS library_files (
+				path TEXT PRIMARY KEY,
+				size INTEGER NOT NULL,
+				mtime INTEGER NOT NULL,
+				hash TEXT NOT NULL
 			)`); err != nil {
 			return nil, err
 		}
@@ -134,6 +169,11 @@ func open(dsn string, readOnly, createSchema bool) (db *DB, err error) {
 	}
 	if db.insertStmt, err = sqlDB.Prepare("INSERT OR IGNORE INTO processed_hashes (hash, filename) VALUES (?, ?)"); err != nil {
 		return nil, err
+	}
+	if !readOnly {
+		if db.fileStmt, err = sqlDB.Prepare("INSERT OR REPLACE INTO library_files (path, size, mtime, hash) VALUES (?, ?, ?, ?)"); err != nil {
+			return nil, err
+		}
 	}
 
 	db.queue = make(chan record, writeQueueSize)
@@ -178,6 +218,68 @@ func (db *DB) SetLibraryFiles(n int) error {
 		return nil
 	}
 	_, err := db.sql.Exec("INSERT OR REPLACE INTO library_state (id, files) VALUES (1, ?)", n)
+	return err
+}
+
+// Files returns every file recorded with [DB.RecordFile], by path. A database from an
+// earlier version has none.
+func (db *DB) Files() (map[string]StoredFile, error) {
+	files := make(map[string]StoredFile)
+	rows, err := db.sql.Query("SELECT path, size, mtime, hash FROM library_files")
+	if err != nil {
+		// Read-only databases from earlier versions have no library_files table.
+		if db.readOnly {
+			return files, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var f StoredFile
+		if err := rows.Scan(&f.Path, &f.Size, &f.ModTime, &f.Hash); err != nil {
+			return nil, err
+		}
+		files[f.Path] = f
+	}
+	return files, rows.Err()
+}
+
+// ForgetFiles removes the given paths from [DB.Files], for files no longer in the
+// library. Their hashes stay recorded (see [DB.Prune]). It does nothing in a
+// read-only database.
+func (db *DB) ForgetFiles(paths []string) error {
+	if db.readOnly || len(paths) == 0 {
+		return nil
+	}
+	tx, err := db.sql.Begin()
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare("DELETE FROM library_files WHERE path = ?")
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+	for _, p := range paths {
+		if _, err := stmt.Exec(p); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// MovePath updates [DB.Files] after the file or folder at from (relative to the
+// library root) was renamed to to, so files moved without being changed are still
+// recognised as unchanged. It does nothing in a read-only database.
+func (db *DB) MovePath(from, to string) error {
+	if db.readOnly {
+		return nil
+	}
+	from, to = filepath.ToSlash(from), filepath.ToSlash(to)
+	_, err := db.sql.Exec(`UPDATE OR REPLACE library_files SET path = ?2 || substr(path, length(?1) + 1)
+		WHERE path = ?1 OR substr(path, 1, length(?1) + 1) = ?1 || '/'`, from, to)
 	return err
 }
 
@@ -313,6 +415,16 @@ func (db *DB) settle(hash string, known bool) {
 // claim on it. It fails if the database is closed or an earlier background write
 // failed. In a read-only database the record is kept in memory only.
 func (db *DB) Record(hash, filename string) error {
+	return db.record(record{hash: hash, filename: filename})
+}
+
+// RecordFile is [DB.Record] for a file now in the library at f.Path, which is also
+// remembered in [DB.Files] so [Sync] can skip it while it is unchanged.
+func (db *DB) RecordFile(hash string, f FileState) error {
+	return db.record(record{hash: hash, filename: filepath.Base(filepath.FromSlash(f.Path)), file: &f})
+}
+
+func (db *DB) record(r record) error {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 	if db.closed {
@@ -321,9 +433,9 @@ func (db *DB) Record(hash, filename string) error {
 	if err := db.Err(); err != nil {
 		return err
 	}
-	db.settle(hash, true)
+	db.settle(r.hash, true)
 	if !db.readOnly {
-		db.queue <- record{hash: hash, filename: filename}
+		db.queue <- r
 	}
 	return nil
 }
@@ -368,6 +480,9 @@ func (db *DB) closeSQL() error {
 	}
 	if db.insertStmt != nil {
 		db.insertStmt.Close()
+	}
+	if db.fileStmt != nil {
+		db.fileStmt.Close()
 	}
 	return db.sql.Close()
 }
@@ -419,8 +534,14 @@ func (db *DB) flush(batch []record) {
 	}
 	stmt := tx.Stmt(db.insertStmt)
 	defer stmt.Close()
+	fileStmt := tx.Stmt(db.fileStmt)
+	defer fileStmt.Close()
 	for _, r := range batch {
-		if _, err := stmt.Exec(r.hash, r.filename); err != nil {
+		_, err := stmt.Exec(r.hash, r.filename)
+		if err == nil && r.file != nil {
+			_, err = fileStmt.Exec(r.file.Path, r.file.Size, r.file.ModTime, r.hash)
+		}
+		if err != nil {
 			tx.Rollback()
 			db.setErr(err)
 			return

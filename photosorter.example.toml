@@ -4,6 +4,9 @@
 # picked up automatically, or pass any path with -config. Every key is optional:
 # anything left out keeps its default (shown below). Command-line flags override
 # values set here. Relative paths are relative to this file's folder.
+#
+# -date, -fallback-date, -event and -album describe a single import, so they can
+# only be given on the command line.
 
 # Library folder to import into (-out). Usually given on the command line instead.
 # out = "/Users/me/Pictures/Library"
@@ -12,8 +15,12 @@
 # in  = ["/Users/me/Downloads/Takeout"]
 # zip = ["/Users/me/Downloads/takeout-*.zip"]
 
-# Hash every file already in the library before importing (-sync).
+# Sync the library before importing: hash files that are new or changed since the
+# last sync (-sync).
 # sync = false
+
+# Sync, hashing every file in the library even if unchanged (-rehash).
+# rehash = false
 
 # Sync, then forget cached hashes of files no longer in the library, so they can be
 # imported again (-prune). Usually given on the command line rather than set here.
