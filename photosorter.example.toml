@@ -15,8 +15,12 @@
 # in  = ["/Users/me/Downloads/Takeout"]
 # zip = ["/Users/me/Downloads/takeout-*.zip"]
 
-# Hash every file already in the library before importing (-sync).
+# Sync the library before importing: hash files that are new or changed since the
+# last sync (-sync).
 # sync = false
+
+# Sync, hashing every file in the library even if unchanged (-rehash).
+# rehash = false
 
 # Sync, then forget cached hashes of files no longer in the library, so they can be
 # imported again (-prune). Usually given on the command line rather than set here.

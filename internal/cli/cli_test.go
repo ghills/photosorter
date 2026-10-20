@@ -190,7 +190,7 @@ func TestRun_DryRunSyncRecordsNothing(t *testing.T) {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	writeFile(t, filepath.Join(lib, "2020-01-01", "b.jpg"), "b")
-	if code, out := runCLI(t, "-out", lib, "-dry-run", "-sync"); code != ExitOK || !strings.Contains(out, "2 files hashed") {
+	if code, out := runCLI(t, "-out", lib, "-dry-run", "-sync"); code != ExitOK || !strings.Contains(out, "1 files hashed, 1 unchanged") {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	if _, out := runCLI(t, "-out", lib, "-sync"); !strings.Contains(out, "1 files tracked") {

@@ -46,9 +46,13 @@ type Config struct {
 	// Zips are Takeout zip files or glob patterns to import from (-zip).
 	Zips []string `toml:"zip"`
 
-	// Sync forces hashing every file already in the library before importing (-sync).
-	// It overrides NoSync.
+	// Sync forces a sync of the library before importing: files that are new or changed
+	// since the last sync are hashed (-sync). It overrides NoSync.
 	Sync bool `toml:"sync"`
+
+	// Rehash syncs the library hashing every file, even unchanged ones (-rehash). It
+	// implies Sync.
+	Rehash bool `toml:"rehash"`
 
 	// Prune syncs the library, then forgets cached hashes of content no longer in it,
 	// so that content can be imported again (-prune). It implies Sync.
@@ -273,8 +277,8 @@ func (c Config) Validate() error {
 		add("an output library folder is required (-out)")
 	}
 	hasInput := len(c.Folders) > 0 || len(c.Zips) > 0
-	if !hasInput && !c.Sync && !c.Prune && !c.Reorganize {
-		add("nothing to do: give an input (-in, -zip), -sync, -prune or -reorganize")
+	if !hasInput && !c.Sync && !c.Rehash && !c.Prune && !c.Reorganize {
+		add("nothing to do: give an input (-in, -zip), -sync, -rehash, -prune or -reorganize")
 	}
 	if c.Manual.IsSet() && !hasInput {
 		add("-date, -fallback-date, -event and -album need something to import: give a folder or zip")

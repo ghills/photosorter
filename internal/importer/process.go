@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"photosorter/internal/library"
 	"photosorter/internal/media"
 	"photosorter/internal/source"
 )
@@ -75,11 +76,17 @@ func (im *Importer) importFile(ctx context.Context, f source.File) (result, erro
 	if err != nil {
 		return result{}, err
 	}
-	if err := im.db.Record(hash, filepath.Base(written)); err != nil {
+	rel, _ = filepath.Rel(im.opts.Library, written)
+	// Remember where the file went, so a later sync needn't hash it again.
+	if state, statErr := library.StatFile(written, rel); statErr == nil {
+		err = im.db.RecordFile(hash, state)
+	} else {
+		err = im.db.Record(hash, filepath.Base(written))
+	}
+	if err != nil {
 		return result{}, err
 	}
 	keepClaim = true
-	rel, _ = filepath.Rel(im.opts.Library, written)
 	return result{outcome: imported, date: date, dest: rel}, nil
 }
 

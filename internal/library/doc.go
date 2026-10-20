@@ -4,7 +4,7 @@
 // Every file in the library is identified by the xxhash of its bytes ([Hash]). The
 // hashes live in [DB], an SQLite file named [DBFileName] at the library root. Files
 // put into the library by other means can be registered with [Sync], which hashes
-// everything on disk. [Scan] lists the media on disk.
+// whatever on disk is new or changed since the database last saw it. [Scan] lists the media on disk.
 // [Reorganize] moves top-level dated folders into year folders, and [PlaceFile] puts
 // a file under a free name without ever overwriting one.
 package library

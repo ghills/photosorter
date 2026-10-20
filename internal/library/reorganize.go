@@ -294,6 +294,7 @@ func (r *reorganizer) moveFolder(from, to string) {
 				r.fail(from, err)
 				return
 			}
+			r.moved(from, to)
 		}
 		r.res.Moved = append(r.res.Moved, Move{From: from, To: to})
 	case err != nil:
@@ -327,6 +328,8 @@ func (r *reorganizer) mergeDir(from, to string) {
 			if !r.dryRun {
 				if err := os.Rename(r.abs(src), r.abs(dst)); err != nil {
 					r.fail(src, err)
+				} else {
+					r.moved(src, dst)
 				}
 			}
 		case e.IsDir() && info.IsDir():
@@ -364,7 +367,16 @@ func (r *reorganizer) moveFile(from, to string) string {
 		r.fail(from, err)
 	}
 	rel, _ := filepath.Rel(r.root, placed)
+	r.moved(from, rel)
 	return rel
+}
+
+// moved records in the database that from was renamed to to, so a later sync knows
+// the files are unchanged.
+func (r *reorganizer) moved(from, to string) {
+	if err := r.db.MovePath(from, to); err != nil && r.dbErr == nil {
+		r.dbErr = err
+	}
 }
 
 // mergeFile handles the file from whose name is already taken at to: an identical

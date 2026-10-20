@@ -150,7 +150,7 @@ func (r *runner) syncLibrary(ctx context.Context, db *library.DB) (libraryFiles,
 		libraryFiles = tracked
 	}
 
-	forced := r.cfg.Sync || r.cfg.Prune
+	forced := r.cfg.Sync || r.cfg.Rehash || r.cfg.Prune
 	if !forced && r.cfg.NoSync {
 		return libraryFiles, ExitOK, true
 	}
@@ -179,6 +179,7 @@ func (r *runner) syncLibrary(ctx context.Context, db *library.DB) (libraryFiles,
 		Workers:  r.cfg.Workers,
 		Progress: r.stderr,
 		Prune:    r.cfg.Prune,
+		Rehash:   r.cfg.Rehash,
 	})
 	r.listPaths("could not read", files.Unreadable)
 	r.listPaths("could not hash", res.Failed)
@@ -190,7 +191,7 @@ func (r *runner) syncLibrary(ctx context.Context, db *library.DB) (libraryFiles,
 		r.errorf("sync failed: %v", err)
 		return 0, ExitFailure, false
 	}
-	r.printf("Sync complete: %d files hashed.\n", res.Hashed)
+	r.printf("Sync complete: %d files hashed, %d unchanged since the last sync.\n", res.Hashed, res.Unchanged)
 	if r.cfg.Prune {
 		r.reportPrune(res)
 	}

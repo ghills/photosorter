@@ -69,6 +69,7 @@ Pass every part of a multi-part export in the same run. A sidecar sometimes ends
 | Date only the files that have no date of their own | `photosorter -out ~/Photos -fallback-date 1998 ~/Scans/mixed` |
 | Keep a batch together as an album | `photosorter -out ~/Photos -album Wedding ~/Downloads/wedding-photos.zip` |
 | Register files you copied into the library by hand | `photosorter -out ~/Photos -sync` |
+| Re-hash every file, e.g. after editing photos in place | `photosorter -out ~/Photos -rehash` |
 | Let deleted files be imported again | `photosorter -out ~/Photos -prune` |
 | Move old `2023-05-14/` folders into year folders | `photosorter -out ~/Photos -reorganize` |
 
@@ -171,15 +172,23 @@ Edited copies (`IMG_1234-edited.jpg`, plus the German, French, Italian and Spani
 
 PhotoSorter hashes each file's bytes with [xxHash](https://github.com/cespare/xxhash). It then checks the hash against `.photosorter_cache.db`, an SQLite database at the library root. Duplicates are detected before anything is written, so they cost no disk writes.
 
-The database only knows about files PhotoSorter imported. If you add files to the library some other way, run a **sync** so PhotoSorter hashes everything already there:
+The database only knows about files PhotoSorter imported. If you add files to the library some other way, run a **sync** so PhotoSorter hashes them too:
 
 ```bash
 ./photosorter -out ~/Pictures/Library -sync
 ```
 
+A sync is incremental. The database remembers the path, size and modification time of every file it has hashed, and files that still match are not read again. So a sync of a large library only costs a directory walk plus hashing whatever is new or changed. Files PhotoSorter imports or moves with `-reorganize` are remembered the same way.
+
+If you edit photos with a tool that keeps their size and timestamp the same, the change won't be noticed. Run a **rehash** to hash every file regardless:
+
+```bash
+./photosorter -out ~/Pictures/Library -rehash
+```
+
 A sync also runs on its own when the library contains media but the database is empty, for example on the first run against an existing library. It also runs when the library has more media files than it held after the last sync or import, which usually means files were copied in by hand. Without that sync, the same photo could be imported a second time. Pass `-no-sync` to turn off the automatic sync.
 
-Deleting a file from the library does not remove its hash, so the same content is still skipped by later imports. That keeps photos you deleted on purpose from coming back. To make PhotoSorter forget files that are gone, run a **prune**. It syncs the library, then removes every cached hash whose content is no longer in it:
+Deleting a file from the library does not remove its hash, so the same content is still skipped by later imports. That keeps photos you deleted on purpose from coming back. To make PhotoSorter forget files that are gone, run a **prune**. It syncs the library, then removes every cached hash whose content is no longer in it (incrementally, like `-sync`):
 
 ```bash
 ./photosorter -out ~/Pictures/Library -prune
@@ -205,7 +214,8 @@ Positional arguments are inputs: folders are imported like `-in`, and anything e
 | `-event <name>` | | Add a name to the dated folders: `2019/2019-07-04 Fireworks/`. Command line only |
 | `-album <name>` | | Put everything from this run in `Albums/<name>/`. Command line only |
 | `-config <file>` | `<out>/photosorter.toml` | Load settings from this TOML file |
-| `-sync` | off | Hash the existing library before importing |
+| `-sync` | off | Hash files in the library that are new or changed since the last sync |
+| `-rehash` | off | Like `-sync`, but hash every file even if unchanged |
 | `-prune` | off | Sync, then forget cached hashes of files no longer in the library so they can be imported again |
 | `-reorganize` | off | Move dated folders at the top of the library into year folders (see [Reorganizing](#reorganizing-an-existing-library)) |
 | `-no-sync` | off | Never sync automatically (`-nosync` is still accepted) |

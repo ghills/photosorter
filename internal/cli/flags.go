@@ -77,7 +77,8 @@ func newFlagSet(cfg *config.Config, configPath *string, output io.Writer) *flag.
 	fs.StringVar(&cfg.Manual.Event, "event", "", "Add this `name` to the dated folders, e.g. 2019/2019-07-04 Fireworks/")
 	fs.StringVar(&cfg.Manual.Album, "album", "", "Put everything from this run in one album, e.g. -album Wedding puts it in Albums/Wedding/")
 
-	fs.BoolVar(&cfg.Sync, "sync", cfg.Sync, "Hash every file already in the library before importing")
+	fs.BoolVar(&cfg.Sync, "sync", cfg.Sync, "Hash files in the library that are new or changed since the last sync, so they count as already imported")
+	fs.BoolVar(&cfg.Rehash, "rehash", cfg.Rehash, "Like -sync, but hash every file in the library, even unchanged ones")
 	fs.BoolVar(&cfg.Prune, "prune", cfg.Prune, "Sync the library, then forget cached hashes of files no longer in it so they can be imported again")
 	fs.BoolVar(&cfg.Reorganize, "reorganize", cfg.Reorganize, "Move dated folders at the top of the library into year folders, e.g. 2023-05-14/ to 2023/2023-05-14/")
 	fs.BoolVar(&cfg.NoSync, "no-sync", cfg.NoSync, "Never sync the library automatically")
@@ -132,8 +133,12 @@ Common tasks (add -dry-run to any of them to see what would happen first):
   Keep a batch together as an album (-> Albums/Wedding/):
     photosorter -out ~/Photos -album Wedding ~/Downloads/wedding-photos.zip
 
-  After copying files into the library by hand, so they count as already imported:
+  After copying files into the library by hand, so they count as already imported
+  (this also happens on its own when the library has more files than last time):
     photosorter -out ~/Photos -sync
+
+  After editing photos in the library with a tool that keeps their timestamps:
+    photosorter -out ~/Photos -rehash
 
   After deleting files from the library, so they can be imported again:
     photosorter -out ~/Photos -prune
@@ -150,7 +155,7 @@ var flagGroups = []struct {
 }{
 	{"Inputs (folders and zips can also be given without -in/-zip)", []string{"out", "in", "zip"}},
 	{"Manual import (this run only; can't be set in the config file)", []string{"date", "fallback-date", "event", "album"}},
-	{"Library maintenance", []string{"dry-run", "sync", "prune", "reorganize", "no-sync"}},
+	{"Library maintenance", []string{"dry-run", "sync", "rehash", "prune", "reorganize", "no-sync"}},
 	{"Dates and folders", []string{"tz", "date-format", "unknown-dir", "albums", "albums-dir"}},
 	{"Which files", []string{"include-ext", "exclude-ext", "skip-short-videos"}},
 	{"Performance", []string{"workers", "max-buffer-mb"}},
