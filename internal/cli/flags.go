@@ -83,6 +83,7 @@ func newFlagSet(cfg *config.Config, configPath *string, output io.Writer) *flag.
 	fs.BoolVar(&cfg.Reorganize, "reorganize", cfg.Reorganize, "Move dated folders at the top of the library into year folders, e.g. 2023-05-14/ to 2023/2023-05-14/")
 	fs.BoolVar(&cfg.NoSync, "no-sync", cfg.NoSync, "Never sync the library automatically")
 	fs.BoolVar(&cfg.NoSync, "nosync", cfg.NoSync, "Deprecated spelling of -no-sync")
+	fs.BoolVar(&cfg.NoXMP, "no-xmp", cfg.NoXMP, "Don't write an XMP sidecar with Google's metadata next to files dated from their Takeout JSON")
 	fs.BoolVar(&cfg.DryRun, "dry-run", cfg.DryRun, "Show what would happen without writing anything")
 
 	fs.IntVar(&cfg.Workers, "workers", cfg.Workers, "Number of files processed concurrently")
@@ -156,7 +157,7 @@ var flagGroups = []struct {
 	{"Inputs (folders and zips can also be given without -in/-zip)", []string{"out", "in", "zip"}},
 	{"Manual import (this run only; can't be set in the config file)", []string{"date", "fallback-date", "event", "album"}},
 	{"Library maintenance", []string{"dry-run", "sync", "rehash", "prune", "reorganize", "no-sync"}},
-	{"Dates and folders", []string{"tz", "date-format", "unknown-dir", "albums", "albums-dir"}},
+	{"Dates, folders and metadata", []string{"tz", "date-format", "unknown-dir", "albums", "albums-dir", "no-xmp"}},
 	{"Which files", []string{"include-ext", "exclude-ext", "skip-short-videos"}},
 	{"Performance", []string{"workers", "max-buffer-mb"}},
 	{"Configuration", []string{"config"}},

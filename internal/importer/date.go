@@ -29,6 +29,22 @@ const (
 // dateSources lists every DateSource in priority order, for reporting.
 var dateSources = []DateSource{DateForced, DateFromEXIF, DateFromJSONTaken, DateFromVideo, DateFromJSONCreation, DateFromFilename, DateFallback, DateUnknown}
 
+// readSidecar returns f's Takeout sidecar. A missing or broken one gives the zero
+// Metadata, which has no dates or other values.
+func readSidecar(f source.File) takeout.Metadata {
+	var meta takeout.Metadata
+	if rc, ok := f.OpenSidecar(); ok {
+		meta, _ = takeout.ReadMetadata(rc) // a broken sidecar counts as none
+		rc.Close()
+	}
+	return meta
+}
+
+// fromSidecar reports whether the date came from the Takeout sidecar.
+func (d dated) fromSidecar() bool {
+	return d.src == DateFromJSONTaken || d.src == DateFromJSONCreation
+}
+
 // dated is a file's date as used to choose its folder.
 type dated struct {
 	t    time.Time
@@ -46,17 +62,17 @@ func (d dated) conflicted() bool { return d.ownSrc != "" }
 
 // dateFile works out the date to file f under: the forced date if there is one,
 // otherwise the file's own date (see captureDate), otherwise the fallback date. movie
-// is f's movie header if it is a video with one.
-func (im *Importer) dateFile(f source.File, movie *media.MovieHeader) dated {
+// is f's movie header if it is a video with one, and meta its Takeout sidecar.
+func (im *Importer) dateFile(f source.File, movie *media.MovieHeader, meta takeout.Metadata) dated {
 	if g := im.opts.ForcedDate; g != nil {
 		d := dated{t: g.Time, prec: g.Precision, src: DateForced}
 		// The file's own date is still read so that an unexpected one gets reported.
-		if own, src := captureDate(f, movie, im.opts.Location); src != DateUnknown && !g.Contains(own) {
+		if own, src := captureDate(f, movie, meta, im.opts.Location); src != DateUnknown && !g.Contains(own) {
 			d.own, d.ownSrc = own, src
 		}
 		return d
 	}
-	t, src := captureDate(f, movie, im.opts.Location)
+	t, src := captureDate(f, movie, meta, im.opts.Location)
 	if src == DateUnknown {
 		if g := im.opts.FallbackDate; g != nil {
 			return dated{t: g.Time, prec: g.Precision, src: DateFallback}
@@ -78,7 +94,7 @@ func (im *Importer) dateFile(f source.File, movie *media.MovieHeader) dated {
 //
 // The returned time is in the zone its date should be read in: EXIF wall-clock times
 // and Apple video creation dates as recorded, everything else in loc.
-func captureDate(f source.File, movie *media.MovieHeader, loc *time.Location) (time.Time, DateSource) {
+func captureDate(f source.File, movie *media.MovieHeader, meta takeout.Metadata, loc *time.Location) (time.Time, DateSource) {
 	if media.HasEXIF(f.Name()) {
 		if rc, err := f.Open(); err == nil {
 			t, ok := media.EXIFDate(rc)
@@ -89,11 +105,6 @@ func captureDate(f source.File, movie *media.MovieHeader, loc *time.Location) (t
 		}
 	}
 
-	var meta takeout.Metadata
-	if rc, ok := f.OpenSidecar(); ok {
-		meta, _ = takeout.ReadMetadata(rc) // a broken sidecar counts as none
-		rc.Close()
-	}
 	if t, ok := meta.PhotoTakenTime.Time(); ok {
 		return t.In(loc), DateFromJSONTaken
 	}

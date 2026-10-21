@@ -18,6 +18,11 @@ type Report struct {
 	// of their own (EXIF, sidecar or file name). The log lists them.
 	DateConflicts int
 
+	// XMPWritten counts XMP sidecars written for files dated from their Takeout
+	// sidecar. XMPFailed counts those that could not be written; the files were still
+	// imported, and the log says why.
+	XMPWritten, XMPFailed int
+
 	Duplicates  int // already in the library (or earlier in this run)
 	ShortVideos int // skipped by the short-video rule
 	Failed      int // could not be imported; see the log
@@ -66,6 +71,12 @@ func (r Report) Print(w io.Writer) {
 		if src == DateForced && r.DateConflicts > 0 {
 			row("    own date differed (log)", r.DateConflicts)
 		}
+	}
+	if r.XMPWritten > 0 {
+		row("XMP sidecars written", r.XMPWritten)
+	}
+	if r.XMPFailed > 0 {
+		row("XMP sidecars failed (log)", r.XMPFailed)
 	}
 	row("Duplicates skipped", r.Duplicates)
 	row("Short videos skipped", r.ShortVideos)

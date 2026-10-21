@@ -9,6 +9,7 @@ import (
 	"photosorter/internal/library"
 	"photosorter/internal/media"
 	"photosorter/internal/source"
+	"photosorter/internal/xmp"
 )
 
 // outcome is what happened to a file that was processed without error.
@@ -25,6 +26,11 @@ type result struct {
 	outcome outcome
 	date    dated
 	dest    string // path relative to the library
+
+	// xmp is the XMP sidecar written next to dest, relative to the library, or ""
+	// for none. xmpErr is why writing one failed; the file is still imported.
+	xmp    string
+	xmpErr error
 }
 
 // importFile runs the per-file pipeline described in the package documentation.
@@ -59,14 +65,23 @@ func (im *Importer) importFile(ctx context.Context, f source.File) (result, erro
 	}
 
 	// 4 & 5. Date the file and choose its folder.
-	date := im.dateFile(f, movie)
+	meta := readSidecar(f)
+	date := im.dateFile(f, movie, meta)
 	dir := im.opts.Layout.Dir(f.Name(), date.t, date.prec, date.src)
 	rel := filepath.Join(dir, filepath.Base(f.Name()))
+	var fields xmp.Fields
+	if !im.opts.NoXMP {
+		fields = xmpFields(meta, date)
+	}
 
 	if im.opts.DryRun {
 		keepClaim = true
 		im.db.Keep(hash) // so identical files later in the run count as duplicates
-		return result{outcome: imported, date: date, dest: rel}, nil
+		res := result{outcome: imported, date: date, dest: rel}
+		if !fields.Empty() {
+			res.xmp = xmp.SidecarPath(rel)
+		}
+		return res, nil
 	}
 
 	// 6. Copy under a free name, then record the hash.
@@ -78,6 +93,8 @@ func (im *Importer) importFile(ctx context.Context, f source.File) (result, erro
 		return result{}, err
 	}
 	rel, _ = filepath.Rel(im.opts.Library, written)
+	res := result{outcome: imported, date: date, dest: rel}
+
 	// Remember where the file went, so a later sync needn't hash it again.
 	if state, statErr := library.StatFile(written, rel); statErr == nil {
 		err = im.db.RecordFile(hash, state)
@@ -88,7 +105,16 @@ func (im *Importer) importFile(ctx context.Context, f source.File) (result, erro
 		return result{}, err
 	}
 	keepClaim = true
-	return result{outcome: imported, date: date, dest: rel}, nil
+
+	// 7. Carry the sidecar's metadata over, if the date came from it.
+	if !fields.Empty() {
+		if sc, err := xmp.WriteSidecar(written, fields); err != nil {
+			res.xmpErr = err
+		} else {
+			res.xmp, _ = filepath.Rel(im.opts.Library, sc)
+		}
+	}
+	return res, nil
 }
 
 // maxMovieScan is how far into a non-seekable stream (a zip entry too large to buffer)

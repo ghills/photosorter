@@ -39,3 +39,35 @@ func TestReadMetadata_BadJSON(t *testing.T) {
 		t.Error("expected a decode error")
 	}
 }
+
+func TestReadMetadata_Extras(t *testing.T) {
+	m, err := ReadMetadata(strings.NewReader(`{
+		"description": "Eiffel Tower",
+		"geoData": {"latitude": 0.0, "longitude": 0.0, "altitude": 0.0},
+		"geoDataExif": {"latitude": 48.8584, "longitude": 2.2945, "altitude": 35.5},
+		"people": [{"name": "Alice"}, {"name": ""}, {"name": "Bob"}],
+		"favorited": true
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g, ok := m.Location(); !ok || g.Latitude != 48.8584 || g.Longitude != 2.2945 || g.Altitude != 35.5 {
+		t.Errorf("Location() = %+v, %v; want geoDataExif when geoData is 0, 0", g, ok)
+	}
+	if got := m.PeopleNames(); len(got) != 2 || got[0] != "Alice" || got[1] != "Bob" {
+		t.Errorf("PeopleNames() = %q", got)
+	}
+	if !m.Favorited || m.Description != "Eiffel Tower" {
+		t.Errorf("Favorited = %v, Description = %q", m.Favorited, m.Description)
+	}
+}
+
+func TestMetadata_LocationPrefersGeoData(t *testing.T) {
+	m := Metadata{GeoData: GeoData{Latitude: 1, Longitude: 2}, GeoDataExif: GeoData{Latitude: 3, Longitude: 4}}
+	if g, ok := m.Location(); !ok || g.Latitude != 1 {
+		t.Errorf("Location() = %+v, %v", g, ok)
+	}
+	if _, ok := (Metadata{}).Location(); ok {
+		t.Error("no location should be reported for 0, 0")
+	}
+}

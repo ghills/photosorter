@@ -37,6 +37,10 @@ type Options struct {
 	// imports all videos.
 	SkipVideosUpTo time.Duration
 
+	// NoXMP turns off XMP sidecars. Otherwise a file dated from its Takeout sidecar
+	// gets an XMP sidecar next to it carrying that metadata over (see xmpFields).
+	NoXMP bool
+
 	// DryRun goes through every step except writing files and database records.
 	DryRun bool
 
@@ -196,11 +200,23 @@ func (im *Importer) handle(ctx context.Context, f source.File, t *tally) {
 			if d.conflicted() {
 				r.DateConflicts++
 			}
+			switch {
+			case res.xmp != "":
+				r.XMPWritten++
+			case res.xmpErr != nil:
+				r.XMPFailed++
+			}
 		})
 		if d.conflicted() {
 			log.Printf("Imported: %s -> %s (date forced; the file's own date is %s, from %s)", f.Name(), res.dest, d.own.Format("2006-01-02"), d.ownSrc)
 		} else {
 			log.Printf("Imported: %s -> %s (date from %s)", f.Name(), res.dest, d.src)
+		}
+		switch {
+		case res.xmp != "":
+			log.Printf("XMP sidecar: %s", res.xmp)
+		case res.xmpErr != nil:
+			log.Printf("XMP sidecar failed: %s: %v", res.dest, res.xmpErr)
 		}
 	}
 }

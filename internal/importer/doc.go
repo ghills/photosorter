@@ -18,6 +18,10 @@
 //     named after an event), or the unknown-date folder.
 //  6. Copy the file under a unique name, through a temp file so a failure never
 //     leaves a partial file behind, then record the hash.
+//  7. If the date came from the Takeout sidecar, write an XMP sidecar next to the
+//     copy carrying over its capture time, location, description, people and
+//     favourite flag (see [Options.NoXMP]). A failure here is logged, but the file
+//     stays imported.
 //
 // Files are processed concurrently. One file's failure is logged and counted but does
 // not stop the run. Cancelling the context, or a database write failure, stops the
