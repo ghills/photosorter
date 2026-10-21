@@ -15,6 +15,7 @@ type DateSource string
 const (
 	DateFromEXIF         DateSource = "exif"
 	DateFromJSONTaken    DateSource = "json_taken"
+	DateFromVideo        DateSource = "video"
 	DateFromJSONCreation DateSource = "json_creation"
 	DateFromFilename     DateSource = "filename"
 	DateUnknown          DateSource = "unknown"
@@ -26,7 +27,7 @@ const (
 )
 
 // dateSources lists every DateSource in priority order, for reporting.
-var dateSources = []DateSource{DateForced, DateFromEXIF, DateFromJSONTaken, DateFromJSONCreation, DateFromFilename, DateFallback, DateUnknown}
+var dateSources = []DateSource{DateForced, DateFromEXIF, DateFromJSONTaken, DateFromVideo, DateFromJSONCreation, DateFromFilename, DateFallback, DateUnknown}
 
 // dated is a file's date as used to choose its folder.
 type dated struct {
@@ -44,17 +45,18 @@ type dated struct {
 func (d dated) conflicted() bool { return d.ownSrc != "" }
 
 // dateFile works out the date to file f under: the forced date if there is one,
-// otherwise the file's own date (see captureDate), otherwise the fallback date.
-func (im *Importer) dateFile(f source.File) dated {
+// otherwise the file's own date (see captureDate), otherwise the fallback date. movie
+// is f's movie header if it is a video with one.
+func (im *Importer) dateFile(f source.File, movie *media.MovieHeader) dated {
 	if g := im.opts.ForcedDate; g != nil {
 		d := dated{t: g.Time, prec: g.Precision, src: DateForced}
 		// The file's own date is still read so that an unexpected one gets reported.
-		if own, src := captureDate(f, im.opts.Location); src != DateUnknown && !g.Contains(own) {
+		if own, src := captureDate(f, movie, im.opts.Location); src != DateUnknown && !g.Contains(own) {
 			d.own, d.ownSrc = own, src
 		}
 		return d
 	}
-	t, src := captureDate(f, im.opts.Location)
+	t, src := captureDate(f, movie, im.opts.Location)
 	if src == DateUnknown {
 		if g := im.opts.FallbackDate; g != nil {
 			return dated{t: g.Time, prec: g.Precision, src: DateFallback}
@@ -65,14 +67,18 @@ func (im *Importer) dateFile(f source.File) dated {
 
 // captureDate works out when f was taken. It tries, in order:
 //
-//  1. the EXIF header (formats that carry one),
+//  1. the EXIF data (formats that carry it),
 //  2. the Takeout sidecar's photoTakenTime,
-//  3. the sidecar's creationTime (upload time: a last resort before guessing),
-//  4. a date embedded in the file name.
+//  3. a video's recording time from its movie header,
+//  4. the sidecar's creationTime (upload time: a last resort before guessing),
+//  5. a date embedded in the file name.
+//
+// The sidecar comes before the movie header because some apps rewrite that header
+// when they re-encode a video, while Google's photoTakenTime is the original's.
 //
 // The returned time is in the zone its date should be read in: EXIF wall-clock times
-// as recorded, everything else in loc.
-func captureDate(f source.File, loc *time.Location) (time.Time, DateSource) {
+// and Apple video creation dates as recorded, everything else in loc.
+func captureDate(f source.File, movie *media.MovieHeader, loc *time.Location) (time.Time, DateSource) {
 	if media.HasEXIF(f.Name()) {
 		if rc, err := f.Open(); err == nil {
 			t, ok := media.EXIFDate(rc)
@@ -83,17 +89,21 @@ func captureDate(f source.File, loc *time.Location) (time.Time, DateSource) {
 		}
 	}
 
+	var meta takeout.Metadata
 	if rc, ok := f.OpenSidecar(); ok {
-		meta, err := takeout.ReadMetadata(rc)
+		meta, _ = takeout.ReadMetadata(rc) // a broken sidecar counts as none
 		rc.Close()
-		if err == nil {
-			if t, ok := meta.PhotoTakenTime.Time(); ok {
-				return t.In(loc), DateFromJSONTaken
-			}
-			if t, ok := meta.CreationTime.Time(); ok {
-				return t.In(loc), DateFromJSONCreation
-			}
+	}
+	if t, ok := meta.PhotoTakenTime.Time(); ok {
+		return t.In(loc), DateFromJSONTaken
+	}
+	if movie != nil {
+		if t, ok := movie.Created(loc); ok {
+			return t, DateFromVideo
 		}
+	}
+	if t, ok := meta.CreationTime.Time(); ok {
+		return t.In(loc), DateFromJSONCreation
 	}
 
 	if t, ok := media.DateFromFilename(f.Name(), loc); ok {

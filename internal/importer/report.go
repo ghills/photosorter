@@ -38,6 +38,7 @@ func (r Report) TotalImported() int {
 var dateLabels = map[DateSource]string{
 	DateFromEXIF:         "dated from EXIF",
 	DateFromJSONTaken:    "dated from JSON (taken)",
+	DateFromVideo:        "dated from video metadata",
 	DateFromJSONCreation: "dated from JSON (created)",
 	DateFromFilename:     "dated from file name",
 	DateUnknown:          "date unknown",

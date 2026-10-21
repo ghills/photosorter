@@ -209,14 +209,24 @@ func mediaUnder(dir string, filter media.Filter) (files []string, unreadable boo
 	return files, unreadable
 }
 
-// fileYear returns the year the media file at path was taken, from its EXIF header or
-// its file name, or 0 if neither has a date. Library files have no Takeout sidecars.
+// fileYear returns the year the media file at path was taken, from its EXIF data, a
+// video's movie header, or its file name, or 0 if none has a date. Library files have
+// no Takeout sidecars.
 func fileYear(path string, loc *time.Location) int {
 	if media.HasEXIF(path) {
 		if f, err := os.Open(path); err == nil {
 			t, ok := media.EXIFDate(f)
 			f.Close()
 			if ok {
+				return t.Year()
+			}
+		}
+	}
+	if media.IsMP4(path) {
+		if f, err := os.Open(path); err == nil {
+			h, err := media.ReadMovieHeader(f)
+			f.Close()
+			if t, ok := h.Created(loc); err == nil && ok {
 				return t.Year()
 			}
 		}

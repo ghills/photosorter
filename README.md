@@ -132,7 +132,7 @@ Older versions put every dated folder at the top of the library (`2023-05-14/`).
 Each folder at the top of the library goes into the folder for its year, along with everything inside it. Folders you renamed keep their names: `2025-10-02 foo bar/` becomes `2025/2025-10-02 foo bar/`.
 
 - **Folders whose name starts with a year** (`2023-05-14`, `2023 Christmas`) go to that year.
-- **Other folders** (`Road trip/`) are dated by the media inside them: EXIF first, then the date in the file name. A folder is moved only if every media file in it has a date and they all fall in the same year. Otherwise it stays where it is, and the run says why.
+- **Other folders** (`Road trip/`) are dated by the media inside them: EXIF first, then a video's recording time, then the date in the file name. A folder is moved only if every media file in it has a date and they all fall in the same year. Otherwise it stays where it is, and the run says why.
 - **Left alone:** year folders, the unknown-date and albums folders, hidden folders, and loose files.
 
 If the target folder already exists, for example because an import already used the new layout, the two are merged. Nothing is overwritten. A file whose name and content are both already in the target is removed. A file whose name is taken by different content gets a `_N` suffix.
@@ -145,14 +145,15 @@ Reorganizing is safe to repeat. Folders already moved are not moved again, and r
 
 For each file, PhotoSorter uses the first of these that works:
 
-1. **EXIF**: `DateTimeOriginal` from JPEG, HEIC and TIFF headers. Only the first 256 KB is read.
+1. **EXIF**: `DateTimeOriginal` from JPEG, TIFF and HEIC files. JPEG and TIFF keep it in a header in the first 256 KB, which is all that is read. HEIC (iPhone photos) keeps it in a separate block that the file's index points to.
 2. **JSON sidecar `photoTakenTime`**: the capture time Google recorded.
-3. **JSON sidecar `creationTime`**: the upload time. This is a last resort before guessing.
-4. **File name**: patterns such as `IMG_20230514_…`, `VID-2023-05-14…`, `Screenshot_2023-05-14…` and `WhatsApp Image 2023-05-14…`.
+3. **Video recording time**, from MP4, MOV, M4V and 3GP files. Videos from Apple devices carry a creation date in local time with its UTC offset, which is used as recorded, like EXIF. Otherwise it is the creation time in the movie header. Many encoders leave that empty, and those files skip this step. It comes after the sidecar because apps that re-encode a video often reset it.
+4. **JSON sidecar `creationTime`**: the upload time. This is a last resort before guessing.
+5. **File name**: patterns such as `IMG_20230514_…`, `VID-2023-05-14…`, `Screenshot_2023-05-14…` and `WhatsApp Image 2023-05-14…`.
 
 If none of them works, the file goes to `Unknown_Date/`, or gets the `-fallback-date` if you gave one. A `-date` replaces all of these (see [Adding photos by hand](#adding-photos-by-hand)).
 
-Sidecar timestamps are absolute instants, so the day they fall on depends on the time zone. PhotoSorter uses the machine's zone unless you pass `-tz`. EXIF times are wall-clock times and are used exactly as recorded.
+Sidecar timestamps and movie header times are absolute instants, so the day they fall on depends on the time zone. PhotoSorter uses the machine's zone unless you pass `-tz`. EXIF times and Apple video creation dates are local times and are used exactly as recorded. A few cameras write their local time into the movie header instead of UTC; their videos can land a day off around midnight.
 
 ### Sidecar matching
 
@@ -223,7 +224,7 @@ Positional arguments are inputs: folders are imported like `-in`, and anything e
 | `-workers <n>` | 8 | Files processed concurrently |
 | `-max-buffer-mb <MB>` | 16 | Files up to this size are read once and kept in memory for hashing, dating and copying. 0 disables this. Peak memory is about `workers × MB` |
 | `-tz <zone>` | machine's zone | IANA zone, e.g. `America/New_York`, used to date sidecar timestamps |
-| `-skip-short-videos <s>` | 3 | Skip MP4/MOV videos this many seconds long or shorter, such as motion-photo clips. 0 imports all videos. Skipped clips aren't recorded, so a later run with a lower value imports them |
+| `-skip-short-videos <s>` | 3 | Skip MP4, MOV, M4V and 3GP videos this many seconds long or shorter, such as motion-photo clips. 0 imports all videos. Skipped clips aren't recorded, so a later run with a lower value imports them |
 | `-date-format <layout>` | `2006/2006-01-02` | Go time layout for dated folders. Slashes nest: `2006/2006-01-02` → `2023/2023-05-14/`, `2006-01-02` → `2023-05-14/` (the old flat layout) |
 | `-unknown-dir <folder>` | `Unknown_Date` | Folder for undated files |
 | `-albums folder\|ignore` | `folder` | Keep albums together, or file their media by date |
@@ -270,7 +271,7 @@ exclude_ext = ["gif"]
   folder)   index sidecars     1 hash (small files kept in memory)     folders
                                2 claim hash in DB ── duplicate? skip
                                3 skip short videos (optional)
-                               4 date: EXIF → sidecar → file name
+                               4 date: EXIF → sidecar → video header → file name
                                5 choose folder (layout)
                                6 copy via temp file, link into place, record hash
 ```
@@ -296,7 +297,7 @@ CI runs these steps plus [staticcheck](https://staticcheck.dev/) on Linux and ma
 | [`internal/config`](internal/config) | The `Config` struct, defaults, TOML loading, validation |
 | [`internal/source`](internal/source) | Zip and folder inputs, behind the `Source`/`File` interfaces |
 | [`internal/takeout`](internal/takeout) | Takeout specifics: sidecar matching, sidecar JSON, album folders |
-| [`internal/media`](internal/media) | Media file types, EXIF and file-name dates, MP4 duration |
+| [`internal/media`](internal/media) | Media file types, EXIF (JPEG, TIFF, HEIC) and file-name dates, MP4 duration and recording time |
 | [`internal/library`](internal/library) | The hash database, content hashing, library sync, reorganizing into year folders |
 | [`internal/importer`](internal/importer) | The per-file import pipeline, folder layout, atomic writes, run report |
 | [`internal/parallel`](internal/parallel) | Shared worker pool with a progress bar |
