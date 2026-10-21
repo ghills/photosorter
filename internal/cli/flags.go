@@ -88,7 +88,7 @@ func newFlagSet(cfg *config.Config, configPath *string, output io.Writer) *flag.
 	fs.IntVar(&cfg.Workers, "workers", cfg.Workers, "Number of files processed concurrently")
 	fs.IntVar(&cfg.MaxBufferMB, "max-buffer-mb", cfg.MaxBufferMB, "Read files up to this size (`MB`) into memory once; 0 disables. Peak memory is about workers × this")
 	fs.StringVar(&cfg.TimeZone, "tz", cfg.TimeZone, "IANA time `zone` for turning timestamps into dates, e.g. America/New_York (default: this machine's)")
-	fs.IntVar(&cfg.SkipShortVideos, "skip-short-videos", cfg.SkipShortVideos, "Skip MP4/MOV videos this many `seconds` long or shorter (motion photos); 0 disables")
+	fs.IntVar(&cfg.SkipShortVideos, "skip-short-videos", cfg.SkipShortVideos, "Skip MP4/MOV/M4V/3GP videos this many `seconds` long or shorter (motion photos); 0 disables")
 
 	fs.StringVar(&cfg.Layout.DateFormat, "date-format", cfg.Layout.DateFormat, "Go time `layout` for dated folders; slashes nest, e.g. 2006/01")
 	fs.StringVar(&cfg.Layout.UnknownDir, "unknown-dir", cfg.Layout.UnknownDir, "Destination `folder` for files with no detectable date")

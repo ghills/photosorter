@@ -226,8 +226,8 @@ func fileYear(path string, loc *time.Location) int {
 		if f, err := os.Open(path); err == nil {
 			h, err := media.ReadMovieHeader(f)
 			f.Close()
-			if t, ok := h.Created(); err == nil && ok {
-				return t.In(loc).Year()
+			if t, ok := h.Created(loc); err == nil && ok {
+				return t.Year()
 			}
 		}
 	}

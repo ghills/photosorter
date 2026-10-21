@@ -149,7 +149,7 @@ func TestMovieHeader_Created(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, ok := h.Created()
+			got, ok := h.Created(time.UTC)
 			if ok != !tc.want.IsZero() || !got.Equal(tc.want) {
 				t.Errorf("Created() = %v, %v; want %v", got, ok, tc.want)
 			}
@@ -160,7 +160,7 @@ func TestMovieHeader_Created(t *testing.T) {
 	binary.BigEndian.PutUint64(far[4:12], 1<<63)
 	if h, err := ReadMovieHeader(bytes.NewReader(box("moov", box("mvhd", far)))); err != nil {
 		t.Fatal(err)
-	} else if got, ok := h.Created(); ok {
+	} else if got, ok := h.Created(time.UTC); ok {
 		t.Errorf("implausible creation time accepted: %v", got)
 	}
 }

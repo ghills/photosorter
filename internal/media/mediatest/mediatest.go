@@ -1,10 +1,12 @@
 // Package mediatest builds minimal, valid media files for tests: a JPEG, TIFF or HEIC
-// image carrying an EXIF capture date, and an MP4 with a movie header.
+// image carrying an EXIF capture date, an MP4 with a movie header, and an iPhone-style
+// MOV with QuickTime creation date metadata.
 package mediatest
 
 import (
 	"bytes"
 	"encoding/binary"
+	"sort"
 	"time"
 )
 
@@ -143,6 +145,61 @@ func MP4(created time.Time, duration time.Duration, mdatSize int) []byte {
 	out := Box("ftyp", []byte("isom\x00\x00\x02\x00"))
 	out = append(out, Box("moov", Box("mvhd", mvhd.Bytes()))...)
 	return append(out, Box("mdat", make([]byte, mdatSize))...)
+}
+
+// AppleMOV returns a QuickTime movie laid out the way an iPhone writes one: ftyp,
+// mdat, then moov holding mvhd (recording created, zero for none), a trak, and meta
+// with a com.apple.quicktime.creationdate item whose value is creationDate.
+func AppleMOV(created time.Time, creationDate string) []byte {
+	mp4 := MP4(created, 10*time.Second, 0)
+	mvhd := mp4[bytes.Index(mp4, []byte("mvhd"))-4:]
+	mvhd = mvhd[:binary.BigEndian.Uint32(mvhd)]
+
+	out := Box("ftyp", []byte("qt  \x00\x00\x00\x00qt  "))
+	out = append(out, Box("mdat", make([]byte, 256))...)
+	moov := append(append([]byte{}, mvhd...), Box("trak", make([]byte, 64))...)
+	moov = append(moov, AppleMeta(map[string]string{
+		"com.apple.quicktime.make":         "Apple",
+		"com.apple.quicktime.creationdate": creationDate,
+	}, false)...)
+	return append(out, Box("moov", moov)...)
+}
+
+// AppleMeta returns a moov → meta box holding the given QuickTime metadata items as
+// UTF-8 values. iso makes it a full box, the ISO form of meta. Items are written in
+// sorted key order.
+func AppleMeta(items map[string]string, iso bool) []byte {
+	names := make([]string, 0, len(items))
+	for k := range items {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+
+	var keys bytes.Buffer
+	put32(&keys, 0) // version and flags
+	put32(&keys, uint32(len(names)))
+	var ilst []byte
+	for i, k := range names {
+		put32(&keys, uint32(8+len(k)))
+		keys.WriteString("mdta")
+		keys.WriteString(k)
+
+		var data bytes.Buffer
+		put32(&data, 1) // UTF-8
+		put32(&data, 0) // locale
+		data.WriteString(items[k])
+		ilst = append(ilst, Box(string(binary.BigEndian.AppendUint32(nil, uint32(i+1))), Box("data", data.Bytes()))...)
+	}
+
+	hdlr := Box("hdlr", append(make([]byte, 8), []byte("mdta\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")...))
+	var body []byte
+	if iso {
+		body = []byte{0, 0, 0, 0}
+	}
+	body = append(body, hdlr...)
+	body = append(body, Box("keys", keys.Bytes())...)
+	body = append(body, Box("ilst", ilst)...)
+	return Box("meta", body)
 }
 
 // Box builds an ISO base media box with a 32-bit size.

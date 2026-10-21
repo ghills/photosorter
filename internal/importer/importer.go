@@ -33,7 +33,8 @@ type Options struct {
 	// step. Zero disables buffering. Peak memory is roughly Workers × BufferLimit.
 	BufferLimit int64
 
-	// SkipVideosUpTo skips MP4/MOV videos no longer than this. Zero imports all videos.
+	// SkipVideosUpTo skips MP4, MOV, M4V and 3GP videos no longer than this. Zero
+	// imports all videos.
 	SkipVideosUpTo time.Duration
 
 	// DryRun goes through every step except writing files and database records.

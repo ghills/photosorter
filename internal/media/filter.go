@@ -20,7 +20,7 @@ var exifExtensions = map[string]bool{".jpg": true, ".jpeg": true, ".tiff": true,
 
 // mp4Extensions are ISO base media (MP4/QuickTime) containers whose movie header
 // ReadMovieHeader can read.
-var mp4Extensions = map[string]bool{".mp4": true, ".mov": true}
+var mp4Extensions = map[string]bool{".mp4": true, ".mov": true, ".m4v": true, ".3gp": true}
 
 // Filter decides which file names are media. The zero value matches nothing; use
 // [DefaultFilter] or [NewFilter].

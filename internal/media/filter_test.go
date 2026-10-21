@@ -75,7 +75,8 @@ func TestHasEXIF(t *testing.T) {
 func TestIsMP4(t *testing.T) {
 	for name, want := range map[string]bool{
 		"video.mp4": true, "video.MP4": true, "video.mov": true, "video.MOV": true,
-		"image.jpg": false, "video.avi": false,
+		"video.m4v": true, "video.3GP": true,
+		"image.jpg": false, "video.avi": false, "video.mkv": false,
 	} {
 		if got := IsMP4(name); got != want {
 			t.Errorf("IsMP4(%q) = %v, want %v", name, got, want)

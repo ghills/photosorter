@@ -80,8 +80,8 @@ type Config struct {
 	// machine's zone (-tz).
 	TimeZone string `toml:"tz"`
 
-	// SkipShortVideos skips MP4/MOV videos no longer than this many seconds, such as
-	// motion-photo clips; 0 disables (-skip-short-videos).
+	// SkipShortVideos skips MP4, MOV, M4V and 3GP videos no longer than this many
+	// seconds, such as motion-photo clips; 0 disables (-skip-short-videos).
 	SkipShortVideos int `toml:"skip_short_videos"`
 
 	Layout Layout `toml:"layout"`

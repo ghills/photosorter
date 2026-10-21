@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"photosorter/internal/media/mediatest"
+	"photosorter/internal/source"
 )
 
 // iPhone photos are HEIC with no date in the file name, so they depend on EXIF.
@@ -70,4 +71,41 @@ func TestRun_DatesUnbufferedZippedVideo(t *testing.T) {
 		t.Fatalf("report = %+v", report)
 	}
 	readFile(t, im.opts.Library, "2021", "2021-08-09", "long.mp4")
+}
+
+// An iPhone video's creation date is local time with its offset, so it gives the day
+// where it was recorded, whatever -tz says. The UTC header time alone would give the 15th.
+func TestRun_DatesAppleVideoFromLocalCreationDate(t *testing.T) {
+	header := time.Date(2023, 5, 15, 6, 30, 0, 0, time.UTC)
+	f := &memFile{name: "IMG_0042.MOV", content: mediatest.AppleMOV(header, "2023-05-14T23:30:00-0700")}
+	f.size = int64(len(f.content))
+
+	loc, _ := time.LoadLocation("Pacific/Auckland")
+	im, _ := newTestImporter(t, Options{Location: loc, SkipVideosUpTo: 3 * time.Second})
+	report := run(t, im, sourceOf(f))
+	if report.Imported[DateFromVideo] != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+	readFile(t, im.opts.Library, "2023", "2023-05-14", "IMG_0042.MOV")
+}
+
+func TestRun_DatesM4VAnd3GP(t *testing.T) {
+	recorded := time.Date(2012, 6, 1, 12, 0, 0, 0, time.UTC)
+	var files []source.File
+	for _, name := range []string{"clip.m4v", "old-phone.3gp", "motion.3gp"} {
+		d := 10 * time.Second
+		if name == "motion.3gp" {
+			d = time.Second
+		}
+		f := &memFile{name: name, content: mediatest.MP4(recorded, d, len(name))}
+		f.size = int64(len(f.content))
+		files = append(files, f)
+	}
+	im, _ := newTestImporter(t, Options{Location: time.UTC, SkipVideosUpTo: 3 * time.Second})
+	report := run(t, im, sourceOf(files...))
+	if report.Imported[DateFromVideo] != 2 || report.ShortVideos != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+	readFile(t, im.opts.Library, "2012", "2012-06-01", "clip.m4v")
+	readFile(t, im.opts.Library, "2012", "2012-06-01", "old-phone.3gp")
 }

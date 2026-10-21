@@ -77,7 +77,7 @@ func (im *Importer) dateFile(f source.File, movie *media.MovieHeader) dated {
 // when they re-encode a video, while Google's photoTakenTime is the original's.
 //
 // The returned time is in the zone its date should be read in: EXIF wall-clock times
-// as recorded, everything else in loc.
+// and Apple video creation dates as recorded, everything else in loc.
 func captureDate(f source.File, movie *media.MovieHeader, loc *time.Location) (time.Time, DateSource) {
 	if media.HasEXIF(f.Name()) {
 		if rc, err := f.Open(); err == nil {
@@ -98,8 +98,8 @@ func captureDate(f source.File, movie *media.MovieHeader, loc *time.Location) (t
 		return t.In(loc), DateFromJSONTaken
 	}
 	if movie != nil {
-		if t, ok := movie.Created(); ok {
-			return t.In(loc), DateFromVideo
+		if t, ok := movie.Created(loc); ok {
+			return t, DateFromVideo
 		}
 	}
 	if t, ok := meta.CreationTime.Time(); ok {
