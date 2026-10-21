@@ -212,6 +212,9 @@ func (im *Importer) handle(ctx context.Context, f source.File, t *tally) {
 		} else {
 			log.Printf("Imported: %s -> %s (date from %s)", f.Name(), res.dest, d.src)
 		}
+		if res.mtimeErr != nil {
+			log.Printf("Could not set modification time: %s: %v", res.dest, res.mtimeErr)
+		}
 		switch {
 		case res.xmp != "":
 			log.Printf("XMP sidecar: %s", res.xmp)

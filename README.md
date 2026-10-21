@@ -3,7 +3,7 @@
 PhotoSorter imports [Google Takeout](https://takeout.google.com/) exports of Google Photos into a plain folder-based photo library on your own disk. It also takes any other folder or zip of photos, and lets you give a date or a name to batches you add by hand.
 
 - **No duplicates.** Every file in the library is identified by a hash of its content. Anything already in the library is skipped, whether it was imported before, came from an earlier Takeout, or was put there by hand.
-- **Correct dates.** Each file goes into a dated folder based on its EXIF data, Google's JSON sidecar files, or failing those, the date in its file name. Google often strips EXIF from exported media, so the sidecars matter.
+- **Correct dates.** Each file goes into a dated folder based on its EXIF data, Google's JSON sidecar files, or failing those, the date in its file name. Google often strips EXIF from exported media, so the sidecars matter. Each file's modification time is set to that date too, for viewers that sort by it.
 - **Google's metadata kept.** When a file's date had to come from its sidecar, PhotoSorter writes an XMP sidecar next to it with the capture time, location, description, people and favourite flag that Google stripped from the file.
 - **Albums kept.** Media from your Google Photos albums can stay grouped as albums.
 - **Works on the zips directly.** No need to extract multi-gigabyte archives first. Extracted folders work too.
@@ -154,6 +154,8 @@ For each file, PhotoSorter uses the first of these that works:
 
 If none of them works, the file goes to `Unknown_Date/`, or gets the `-fallback-date` if you gave one. A `-date` replaces all of these (see [Adding photos by hand](#adding-photos-by-hand)).
 
+The imported copy's modification time is set to the date it was filed under, so file browsers and viewers that sort by it show photos in the order they were taken. EXIF times, `-date` and `-fallback-date` have no time zone, so they are read in the `-tz` zone; a `-date 2019-07` file gets midnight on July 1st. Files with no date keep the time they were copied. Files imported before this feature keep their old modification times.
+
 Sidecar timestamps and movie header times are absolute instants, so the day they fall on depends on the time zone. PhotoSorter uses the machine's zone unless you pass `-tz`. EXIF times and Apple video creation dates are local times and are used exactly as recorded. A few cameras write their local time into the movie header instead of UTC; their videos can land a day off around midnight.
 
 ### Sidecar matching
@@ -289,7 +291,7 @@ exclude_ext = ["gif"]
                                3 skip short videos (optional)
                                4 date: EXIF → sidecar → video header → file name
                                5 choose folder (layout)
-                               6 copy via temp file, link into place, record hash
+                               6 copy via temp file, link into place, set mtime, record hash
                                7 XMP sidecar, if dated from the JSON sidecar
 ```
 

@@ -17,7 +17,8 @@
 //  5. Choose a folder with [Layout]: an album folder, a date folder (optionally
 //     named after an event), or the unknown-date folder.
 //  6. Copy the file under a unique name, through a temp file so a failure never
-//     leaves a partial file behind, then record the hash.
+//     leaves a partial file behind. Set its modification time to its date (see
+//     modTime), then record the hash.
 //  7. If the date came from the Takeout sidecar, write an XMP sidecar next to the
 //     copy carrying over its capture time, location, description, people and
 //     favourite flag (see [Options.NoXMP]). A failure here is logged, but the file

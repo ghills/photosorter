@@ -31,6 +31,10 @@ type result struct {
 	// for none. xmpErr is why writing one failed; the file is still imported.
 	xmp    string
 	xmpErr error
+
+	// mtimeErr is why the copy's modification time could not be set to its date; the
+	// file is still imported.
+	mtimeErr error
 }
 
 // importFile runs the per-file pipeline described in the package documentation.
@@ -84,7 +88,7 @@ func (im *Importer) importFile(ctx context.Context, f source.File) (result, erro
 		return res, nil
 	}
 
-	// 6. Copy under a free name, then record the hash.
+	// 6. Copy under a free name, date its modification time, then record the hash.
 	if err := os.MkdirAll(filepath.Join(im.opts.Library, dir), 0755); err != nil {
 		return result{}, err
 	}
@@ -94,6 +98,8 @@ func (im *Importer) importFile(ctx context.Context, f source.File) (result, erro
 	}
 	rel, _ = filepath.Rel(im.opts.Library, written)
 	res := result{outcome: imported, date: date, dest: rel}
+	// Before StatFile, so the recorded modification time is the one the file keeps.
+	res.mtimeErr = setModTime(written, date, im.opts.Location)
 
 	// Remember where the file went, so a later sync needn't hash it again.
 	if state, statErr := library.StatFile(written, rel); statErr == nil {
