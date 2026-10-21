@@ -15,10 +15,11 @@ var DefaultExtensions = []string{
 	".mp4", ".mov", ".avi", ".mkv", ".webm", ".mts", ".3gp", ".m4v",
 }
 
-// exifExtensions are formats whose EXIF header goexif can decode.
+// exifExtensions are formats whose EXIF data EXIFDate can read.
 var exifExtensions = map[string]bool{".jpg": true, ".jpeg": true, ".tiff": true, ".tif": true, ".heic": true}
 
-// mp4Extensions are ISO base media (MP4/QuickTime) containers whose duration MP4Duration can read.
+// mp4Extensions are ISO base media (MP4/QuickTime) containers whose movie header
+// ReadMovieHeader can read.
 var mp4Extensions = map[string]bool{".mp4": true, ".mov": true}
 
 // Filter decides which file names are media. The zero value matches nothing; use
@@ -112,7 +113,7 @@ func HasEXIF(name string) bool {
 	return exifExtensions[strings.ToLower(filepath.Ext(name))]
 }
 
-// HasMP4Duration reports whether name is a container [MP4Duration] can read.
-func HasMP4Duration(name string) bool {
+// IsMP4 reports whether name is a container [ReadMovieHeader] can read.
+func IsMP4(name string) bool {
 	return mp4Extensions[strings.ToLower(filepath.Ext(name))]
 }

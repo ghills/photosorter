@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"photosorter/internal/media"
+	"photosorter/internal/media/mediatest"
 )
 
 func reorgOpts() ReorganizeOptions {
@@ -275,5 +276,25 @@ func TestReorganize_StopsOnCancel(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(lib, "2023-05-14", "a.jpg")); err != nil {
 		t.Errorf("moved despite cancellation: %v", err)
+	}
+}
+
+func TestReorganize_DatesFoldersFromMediaMetadata(t *testing.T) {
+	lib := t.TempDir()
+	taken := time.Date(2018, 3, 1, 9, 0, 0, 0, time.UTC)
+	writeFiles(t, lib, map[string]string{
+		"Phone/IMG_0001.HEIC": string(mediatest.HEIC(taken, mediatest.HEICOptions{})),
+		"Phone/clip.mov":      string(mediatest.MP4(taken, 5*time.Second, 16)),
+		"Camera/MVI_0002.mp4": string(mediatest.MP4(taken, 5*time.Second, 16)),
+	})
+	db := syncedDB(t, lib)
+	res := reorganize(t, lib, db, reorgOpts())
+	if len(res.Moved) != 2 {
+		t.Fatalf("moved %v, want Phone and Camera", res.Moved)
+	}
+	for _, p := range []string{"2018/Phone/IMG_0001.HEIC", "2018/Phone/clip.mov", "2018/Camera/MVI_0002.mp4"} {
+		if _, err := os.Stat(filepath.Join(lib, filepath.FromSlash(p))); err != nil {
+			t.Error(err)
+		}
 	}
 }

@@ -1,6 +1,7 @@
 package media
 
 import (
+	"bytes"
 	"io"
 	"path/filepath"
 	"regexp"
@@ -15,12 +16,33 @@ import (
 const exifReadLimit = 256 << 10
 
 // EXIFDate returns the DateTimeOriginal (or DateTime) recorded in r's EXIF header.
+// r is a whole JPEG, TIFF or HEIF (HEIC) file; the format is detected from its content.
 //
 // EXIF stores a wall-clock time with no zone. The returned time carries that wall
 // clock as-is, so formatting it gives the date the camera showed, whatever zone the
 // importer runs in.
 func EXIFDate(r io.Reader) (time.Time, bool) {
-	x, err := exif.Decode(io.LimitReader(r, exifReadLimit))
+	head := make([]byte, 8)
+	n, _ := io.ReadFull(r, head)
+	head = head[:n]
+
+	var tiff io.Reader
+	if isHEIF(head) {
+		// The meta box sits near the start; read up to the limit so it can be parsed whole.
+		rest, err := io.ReadAll(io.LimitReader(r, exifReadLimit-int64(n)))
+		if err != nil {
+			return time.Time{}, false
+		}
+		data, err := heifEXIF(append(head, rest...), r)
+		if err != nil {
+			return time.Time{}, false
+		}
+		tiff = bytes.NewReader(data)
+	} else {
+		tiff = io.MultiReader(bytes.NewReader(head), io.LimitReader(r, exifReadLimit-int64(n)))
+	}
+
+	x, err := exif.Decode(tiff)
 	if err != nil {
 		return time.Time{}, false
 	}

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"photosorter/internal/media/mediatest"
 )
 
 // box builds an MP4 box with a 32-bit size header.
@@ -117,5 +119,48 @@ func TestMP4Duration_SeekableSkip(t *testing.T) {
 	defer f.Close()
 	if _, err := MP4Duration(f); err == nil {
 		t.Error("expected error for box extending past EOF")
+	}
+}
+
+func TestMovieHeader_Created(t *testing.T) {
+	recorded := time.Date(2023, 5, 14, 19, 0, 0, 0, time.UTC)
+	v1 := mvhdV1(1000, 5500)
+	binary.BigEndian.PutUint64(v1[4:12], uint64(recorded.Unix()-mp4Epoch))
+
+	tests := []struct {
+		name    string
+		content []byte
+		want    time.Time // zero for none
+	}{
+		{"v0", mediatest.MP4(recorded, 2*time.Second, 64), recorded},
+		{"v1", box("moov", box("mvhd", v1)), recorded},
+		{"no creation time", mediatest.MP4(time.Time{}, 2*time.Second, 0), time.Time{}},
+		{"Unix seconds written as MP4 seconds", mediatest.MP4(time.Unix(recorded.Unix()+mp4Epoch, 0), time.Second, 0), time.Time{}},
+		// A zero timescale makes the duration unreadable, but the creation time is still good.
+		{"zero timescale", box("moov", box("mvhd", func() []byte {
+			b := mvhdV0(0, 10)
+			binary.BigEndian.PutUint32(b[4:8], uint32(recorded.Unix()-mp4Epoch))
+			return b
+		}())), recorded},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, err := ReadMovieHeader(bytes.NewReader(tc.content))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, ok := h.Created()
+			if ok != !tc.want.IsZero() || !got.Equal(tc.want) {
+				t.Errorf("Created() = %v, %v; want %v", got, ok, tc.want)
+			}
+		})
+	}
+
+	far := mvhdV1(1000, 1)
+	binary.BigEndian.PutUint64(far[4:12], 1<<63)
+	if h, err := ReadMovieHeader(bytes.NewReader(box("moov", box("mvhd", far)))); err != nil {
+		t.Fatal(err)
+	} else if got, ok := h.Created(); ok {
+		t.Errorf("implausible creation time accepted: %v", got)
 	}
 }

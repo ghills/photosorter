@@ -114,7 +114,7 @@ Common tasks (add -dry-run to any of them to see what would happen first):
   Import a Google Takeout export. Pass every part of it together:
     photosorter -out ~/Photos ~/Downloads/takeout-*.zip
 
-  Add a folder or zip of photos, dated from the files themselves (EXIF, file name):
+  Add a folder or zip of photos, dated from the files themselves (EXIF, video metadata, file name):
     photosorter -out ~/Photos ~/Desktop/phone-backup
 
   Add photos you know the date of. Every file gets this date, even if it has its own:

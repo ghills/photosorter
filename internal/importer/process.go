@@ -53,12 +53,13 @@ func (im *Importer) importFile(ctx context.Context, f source.File) (result, erro
 
 	// 3. Skip motion-photo clips and other very short videos. They are not recorded, so
 	// a later run with a lower threshold can still import them.
-	if im.isShortVideo(f) {
+	movie := readMovie(f)
+	if im.isShortVideo(movie) {
 		return result{outcome: shortVideo}, nil
 	}
 
 	// 4 & 5. Date the file and choose its folder.
-	date := im.dateFile(f)
+	date := im.dateFile(f, movie)
 	dir := im.opts.Layout.Dir(f.Name(), date.t, date.prec, date.src)
 	rel := filepath.Join(dir, filepath.Base(f.Name()))
 
@@ -90,26 +91,40 @@ func (im *Importer) importFile(ctx context.Context, f source.File) (result, erro
 	return result{outcome: imported, date: date, dest: rel}, nil
 }
 
-// maxDurationScan is how far into a non-seekable stream (a zip entry too large to
-// buffer) the duration check reads before giving up. Without a seek, a video whose
-// moov box sits after its media data would otherwise be decompressed in full.
-const maxDurationScan = 64 << 20
+// maxMovieScan is how far into a non-seekable stream (a zip entry too large to buffer)
+// readMovie reads before giving up. Without a seek, a video whose moov box sits after
+// its media data would otherwise be decompressed in full.
+const maxMovieScan = 64 << 20
 
-// isShortVideo reports whether f is a video no longer than the configured threshold.
-// Videos whose duration can't be read are never considered short.
-func (im *Importer) isShortVideo(f source.File) bool {
-	if im.opts.SkipVideosUpTo <= 0 || !media.HasMP4Duration(f.Name()) {
-		return false
+// readMovie returns f's MP4/QuickTime movie header, or nil if f is not such a video or
+// the header can't be read. It is read once and used for both the short-video check
+// and the date.
+func readMovie(f source.File) *media.MovieHeader {
+	if !media.IsMP4(f.Name()) {
+		return nil
 	}
 	rc, err := f.Open()
 	if err != nil {
-		return false
+		return nil
 	}
 	defer rc.Close()
 	var r io.Reader = rc
 	if _, ok := rc.(io.Seeker); !ok {
-		r = io.LimitReader(rc, maxDurationScan)
+		r = io.LimitReader(rc, maxMovieScan)
 	}
-	d, err := media.MP4Duration(r)
+	h, err := media.ReadMovieHeader(r)
+	if err != nil {
+		return nil
+	}
+	return &h
+}
+
+// isShortVideo reports whether movie is no longer than the configured threshold.
+// Videos whose duration can't be read are never considered short.
+func (im *Importer) isShortVideo(movie *media.MovieHeader) bool {
+	if im.opts.SkipVideosUpTo <= 0 || movie == nil {
+		return false
+	}
+	d, err := movie.Duration()
 	return err == nil && d > 0 && d <= im.opts.SkipVideosUpTo
 }
