@@ -18,8 +18,8 @@ type Report struct {
 	// of their own (EXIF, sidecar or file name). The log lists them.
 	DateConflicts int
 
-	// XMPWritten counts XMP sidecars written for files dated from their Takeout
-	// sidecar. XMPFailed counts those that could not be written; the files were still
+	// XMPWritten counts XMP sidecars written (in a dry run, that would be written) for
+	// files dated from their Takeout sidecar. XMPFailed counts those that could not be written; the files were still
 	// imported, and the log says why.
 	XMPWritten, XMPFailed int
 
@@ -73,7 +73,11 @@ func (r Report) Print(w io.Writer) {
 		}
 	}
 	if r.XMPWritten > 0 {
-		row("XMP sidecars written", r.XMPWritten)
+		label := "XMP sidecars written"
+		if r.DryRun {
+			label = "XMP sidecars to write"
+		}
+		row(label, r.XMPWritten)
 	}
 	if r.XMPFailed > 0 {
 		row("XMP sidecars failed (log)", r.XMPFailed)

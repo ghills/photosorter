@@ -3,6 +3,8 @@ package importer
 import (
 	"os"
 	"time"
+
+	"photosorter/internal/media"
 )
 
 // modTime returns the modification time an imported file should get for date, or
@@ -11,9 +13,8 @@ import (
 //
 // Wall-clock dates are read in loc, the zone sidecar timestamps are dated in, so the
 // file's modification time falls on the day of the folder it is in. These are EXIF
-// times, which goexif returns in the machine's zone unless the camera recorded one,
-// and -date and -fallback-date, which are midnight UTC. Every other date is already
-// an instant.
+// times without a recorded UTC offset (see media.EXIFHasZone), and -date and
+// -fallback-date, which are midnight UTC. Every other date is already an instant.
 func modTime(date dated, loc *time.Location) (time.Time, bool) {
 	t := date.t
 	switch date.src {
@@ -22,7 +23,7 @@ func modTime(date dated, loc *time.Location) (time.Time, bool) {
 	case DateForced, DateFallback:
 		t = wallClockIn(t, loc)
 	case DateFromEXIF:
-		if t.Location() == time.Local {
+		if !media.EXIFHasZone(t) {
 			t = wallClockIn(t, loc)
 		}
 	}

@@ -77,3 +77,16 @@ func TestWriteSidecar(t *testing.T) {
 		t.Errorf("existing sidecar was replaced:\n%s", b)
 	}
 }
+
+// Minutes that round up to 60 carry into the degrees.
+func TestEncode_CoordinateCarriesRoundedMinutes(t *testing.T) {
+	doc := string(Encode(Fields{GPS: GPS{Latitude: 48.999999999, Longitude: -2.999999999}, HasGPS: true}))
+	for _, want := range []string{
+		"<exif:GPSLatitude>49,0.000000N</exif:GPSLatitude>",
+		"<exif:GPSLongitude>3,0.000000W</exif:GPSLongitude>",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("missing %s in\n%s", want, doc)
+		}
+	}
+}

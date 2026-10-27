@@ -107,8 +107,10 @@ func coordinate(deg float64, pos, neg byte) string {
 	if deg < 0 {
 		ref, deg = neg, -deg
 	}
-	whole := math.Floor(deg)
-	return fmt.Sprintf("%d,%.6f%c", int(whole), (deg-whole)*60, ref)
+	// Round to millionths of a minute before splitting, so 59.9999999 minutes carries
+	// into the next degree instead of printing as 60.000000.
+	micro := int64(math.Round(deg * 60e6))
+	return fmt.Sprintf("%d,%d.%06d%c", micro/60e6, micro%60e6/1e6, micro%1e6, ref)
 }
 
 func escape(s string) string {

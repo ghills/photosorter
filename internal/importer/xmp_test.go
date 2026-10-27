@@ -1,7 +1,6 @@
 package importer
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,9 +108,10 @@ func TestRun_NoXMPOption(t *testing.T) {
 	}
 }
 
-// The sidecar follows the name the file was given, and an existing sidecar is never
-// replaced: the import still succeeds and the failure is counted.
-func TestRun_XMPFollowsRenamedFileAndKeepsExisting(t *testing.T) {
+// The sidecar follows the name the file was given. A name whose sidecar was left
+// behind counts as taken, so that sidecar is never replaced or attached to a
+// different photo.
+func TestRun_XMPFollowsRenamedFileAndSkipsLeftoverSidecar(t *testing.T) {
 	im, _ := newTestImporter(t, Options{Location: time.UTC})
 	dir := filepath.Join(im.opts.Library, "2023", "2023-05-14")
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -122,19 +122,16 @@ func TestRun_XMPFollowsRenamedFileAndKeepsExisting(t *testing.T) {
 
 	a := newMemFile("IMG_1234.jpg", "first")
 	a.sidecar = googleSidecar
-	report, err := im.Run(context.Background(), sourceOf(a))
-	if err != nil || report.TotalImported() != 1 || report.XMPFailed != 1 {
-		t.Fatalf("report = %+v, err = %v", report, err)
-	}
-	if got := readFile(t, dir, "IMG_1234_1.jpg.xmp"); got != "mine" {
-		t.Errorf("existing sidecar replaced:\n%s", got)
-	}
-
-	b := newMemFile("IMG_1234.jpg", "second")
-	b.sidecar = googleSidecar
-	if report := run(t, im, sourceOf(b)); report.XMPWritten != 1 {
+	if report := run(t, im, sourceOf(a)); report.TotalImported() != 1 || report.XMPWritten != 1 {
 		t.Fatalf("report = %+v", report)
 	}
+	if _, err := os.Stat(filepath.Join(dir, "IMG_1234_1.jpg")); err == nil {
+		t.Error("file placed next to a leftover sidecar")
+	}
+	if got := readFile(t, dir, "IMG_1234_1.jpg.xmp"); got != "mine" {
+		t.Errorf("leftover sidecar replaced:\n%s", got)
+	}
+	readFile(t, dir, "IMG_1234_2.jpg")
 	readFile(t, dir, "IMG_1234_2.jpg.xmp")
 }
 
@@ -147,5 +144,25 @@ func TestRun_DryRunWritesNoXMP(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(im.opts.Library, "2023")); err == nil {
 		t.Error("dry run wrote files")
+	}
+}
+
+// A photo dated from EXIF needs nothing from its Takeout sidecar, so it isn't read.
+func TestRun_EXIFDatedPhotoSkipsSidecar(t *testing.T) {
+	f := &memFile{name: "camera.jpg", content: mediatest.JPEG(time.Date(2023, 5, 14, 12, 0, 0, 0, time.UTC)), sidecar: googleSidecar}
+	im, _ := newTestImporter(t, Options{Location: time.UTC})
+	if report := run(t, im, sourceOf(f)); report.Imported[DateFromEXIF] != 1 {
+		t.Fatalf("report = %+v", report)
+	}
+	if n := f.sidecarOpens.Load(); n != 0 {
+		t.Errorf("sidecar opened %d times, want 0", n)
+	}
+}
+
+func TestReport_DryRunSaysXMPToWrite(t *testing.T) {
+	var b strings.Builder
+	Report{DryRun: true, XMPWritten: 2}.Print(&b)
+	if !strings.Contains(b.String(), "XMP sidecars to write") || strings.Contains(b.String(), "XMP sidecars written") {
+		t.Errorf("report:\n%s", b.String())
 	}
 }

@@ -20,7 +20,8 @@ const exifReadLimit = 256 << 10
 //
 // EXIF stores a wall-clock time with no zone. The returned time carries that wall
 // clock as-is, so formatting it gives the date the camera showed, whatever zone the
-// importer runs in.
+// importer runs in. It is in the UTC offset the camera recorded if there is one, and
+// in time.Local otherwise (see [EXIFHasZone]).
 func EXIFDate(r io.Reader) (time.Time, bool) {
 	head := make([]byte, 8)
 	n, _ := io.ReadFull(r, head)
@@ -52,6 +53,10 @@ func EXIFDate(r io.Reader) (time.Time, bool) {
 	}
 	return t, true
 }
+
+// EXIFHasZone reports whether t, from [EXIFDate], is in the UTC offset the camera
+// recorded. Otherwise only its wall clock is known.
+func EXIFHasZone(t time.Time) bool { return t.Location() != time.Local }
 
 // filenameDate matches YYYYMMDD, YYYY-MM-DD or YYYY_MM_DD, optionally after a common
 // camera or app prefix such as IMG_, VID-, Screenshot_ or "WhatsApp Image ".

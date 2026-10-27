@@ -62,8 +62,9 @@ func (d dated) conflicted() bool { return d.ownSrc != "" }
 
 // dateFile works out the date to file f under: the forced date if there is one,
 // otherwise the file's own date (see captureDate), otherwise the fallback date. movie
-// is f's movie header if it is a video with one, and meta its Takeout sidecar.
-func (im *Importer) dateFile(f source.File, movie *media.MovieHeader, meta takeout.Metadata) dated {
+// is f's movie header if it is a video with one, and meta returns its Takeout sidecar
+// (see captureDate).
+func (im *Importer) dateFile(f source.File, movie *media.MovieHeader, meta func() takeout.Metadata) dated {
 	if g := im.opts.ForcedDate; g != nil {
 		d := dated{t: g.Time, prec: g.Precision, src: DateForced}
 		// The file's own date is still read so that an unexpected one gets reported.
@@ -94,7 +95,10 @@ func (im *Importer) dateFile(f source.File, movie *media.MovieHeader, meta takeo
 //
 // The returned time is in the zone its date should be read in: EXIF wall-clock times
 // and Apple video creation dates as recorded, everything else in loc.
-func captureDate(f source.File, movie *media.MovieHeader, meta takeout.Metadata, loc *time.Location) (time.Time, DateSource) {
+//
+// meta returns f's Takeout sidecar. It is only called when there is no EXIF date, so
+// that most photos don't need theirs read.
+func captureDate(f source.File, movie *media.MovieHeader, meta func() takeout.Metadata, loc *time.Location) (time.Time, DateSource) {
 	if media.HasEXIF(f.Name()) {
 		if rc, err := f.Open(); err == nil {
 			t, ok := media.EXIFDate(rc)
@@ -105,7 +109,7 @@ func captureDate(f source.File, movie *media.MovieHeader, meta takeout.Metadata,
 		}
 	}
 
-	if t, ok := meta.PhotoTakenTime.Time(); ok {
+	if t, ok := meta().PhotoTakenTime.Time(); ok {
 		return t.In(loc), DateFromJSONTaken
 	}
 	if movie != nil {
@@ -113,7 +117,7 @@ func captureDate(f source.File, movie *media.MovieHeader, meta takeout.Metadata,
 			return t, DateFromVideo
 		}
 	}
-	if t, ok := meta.CreationTime.Time(); ok {
+	if t, ok := meta().CreationTime.Time(); ok {
 		return t.In(loc), DateFromJSONCreation
 	}
 

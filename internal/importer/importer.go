@@ -195,15 +195,16 @@ func (im *Importer) handle(ctx context.Context, f source.File, t *tally) {
 		log.Printf("Short video skipped: %s", f.Name())
 	default:
 		d := res.date
+		xmpWritten, xmpFailed := res.xmp != "", res.xmpErr != nil
 		t.add(func(r *Report) {
 			r.Imported[d.src]++
 			if d.conflicted() {
 				r.DateConflicts++
 			}
-			switch {
-			case res.xmp != "":
+			if xmpWritten {
 				r.XMPWritten++
-			case res.xmpErr != nil:
+			}
+			if xmpFailed {
 				r.XMPFailed++
 			}
 		})
@@ -215,10 +216,10 @@ func (im *Importer) handle(ctx context.Context, f source.File, t *tally) {
 		if res.mtimeErr != nil {
 			log.Printf("Could not set modification time: %s: %v", res.dest, res.mtimeErr)
 		}
-		switch {
-		case res.xmp != "":
+		if xmpWritten {
 			log.Printf("XMP sidecar: %s", res.xmp)
-		case res.xmpErr != nil:
+		}
+		if xmpFailed {
 			log.Printf("XMP sidecar failed: %s: %v", res.dest, res.xmpErr)
 		}
 	}

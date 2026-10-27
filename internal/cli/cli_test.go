@@ -251,6 +251,8 @@ func TestRun_PruneAllowsReimportOfDeletedFiles(t *testing.T) {
 	if err := os.Remove(victim); err != nil {
 		t.Fatal(err)
 	}
+	// Its XMP sidecar too: one left behind would keep the name taken.
+	os.Remove(victim + ".xmp")
 
 	if code, out := runCLI(t, "-out", lib, "-dry-run", "-prune"); code != ExitOK || !strings.Contains(out, "Would prune 1 cached hash") {
 		t.Fatalf("dry-run prune: exit %d\n%s", code, out)

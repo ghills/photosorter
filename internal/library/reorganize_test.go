@@ -226,6 +226,67 @@ func TestReorganize_MergesIntoExistingFolder(t *testing.T) {
 	}
 }
 
+// A file's XMP sidecar follows it when the merge renames it, and stays with the
+// copy that is kept when it is a duplicate.
+func TestReorganize_MergeKeepsSidecarsWithTheirFiles(t *testing.T) {
+	lib := t.TempDir()
+	writeFiles(t, lib, map[string]string{
+		"2023-05-14/clash.jpg":          "old copy",
+		"2023-05-14/clash.jpg.xmp":      "old copy's sidecar",
+		"2023-05-14/same.jpg":           "same",
+		"2023-05-14/same.jpg.xmp":       "same's sidecar",
+		"2023-05-14/new.jpg":            "new",
+		"2023-05-14/new.jpg.xmp":        "new's sidecar",
+		"2023-05-14/orphan.jpg.xmp":     "no file",
+		"2023/2023-05-14/clash.jpg":     "imported copy",
+		"2023/2023-05-14/clash.jpg.xmp": "imported copy's sidecar",
+		"2023/2023-05-14/same.jpg":      "same",
+		"2023/2023-05-14/new_1.jpg.xmp": "left behind",
+	})
+	db := syncedDB(t, lib)
+
+	reorganize(t, lib, db, reorgOpts())
+
+	want := []string{
+		"2023/2023-05-14/clash.jpg.xmp=imported copy's sidecar",
+		"2023/2023-05-14/clash.jpg=imported copy",
+		"2023/2023-05-14/clash_1.jpg.xmp=old copy's sidecar",
+		"2023/2023-05-14/clash_1.jpg=old copy",
+		"2023/2023-05-14/new.jpg.xmp=new's sidecar",
+		"2023/2023-05-14/new.jpg=new",
+		"2023/2023-05-14/new_1.jpg.xmp=left behind",
+		"2023/2023-05-14/orphan.jpg.xmp=no file",
+		"2023/2023-05-14/same.jpg.xmp=same's sidecar",
+		"2023/2023-05-14/same.jpg=same",
+	}
+	if got := tree(t, lib); !reflect.DeepEqual(got, want) {
+		t.Errorf("library:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A file whose name is taken in the target folder is placed past names whose
+// sidecar was left behind.
+func TestReorganize_RenameSkipsLeftoverSidecar(t *testing.T) {
+	lib := t.TempDir()
+	writeFiles(t, lib, map[string]string{
+		"2023-05-14/clash.jpg":            "old copy",
+		"2023/2023-05-14/clash.jpg":       "imported copy",
+		"2023/2023-05-14/clash_1.jpg.xmp": "left behind",
+	})
+	db := syncedDB(t, lib)
+
+	reorganize(t, lib, db, reorgOpts())
+
+	want := []string{
+		"2023/2023-05-14/clash.jpg=imported copy",
+		"2023/2023-05-14/clash_1.jpg.xmp=left behind",
+		"2023/2023-05-14/clash_2.jpg=old copy",
+	}
+	if got := tree(t, lib); !reflect.DeepEqual(got, want) {
+		t.Errorf("library:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func TestReorganize_DryRunChangesNothing(t *testing.T) {
 	lib := t.TempDir()
 	writeFiles(t, lib, map[string]string{

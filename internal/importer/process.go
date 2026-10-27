@@ -5,10 +5,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"photosorter/internal/library"
 	"photosorter/internal/media"
 	"photosorter/internal/source"
+	"photosorter/internal/takeout"
 	"photosorter/internal/xmp"
 )
 
@@ -69,13 +71,13 @@ func (im *Importer) importFile(ctx context.Context, f source.File) (result, erro
 	}
 
 	// 4 & 5. Date the file and choose its folder.
-	meta := readSidecar(f)
+	meta := sync.OnceValue(func() takeout.Metadata { return readSidecar(f) })
 	date := im.dateFile(f, movie, meta)
 	dir := im.opts.Layout.Dir(f.Name(), date.t, date.prec, date.src)
 	rel := filepath.Join(dir, filepath.Base(f.Name()))
 	var fields xmp.Fields
-	if !im.opts.NoXMP {
-		fields = xmpFields(meta, date)
+	if !im.opts.NoXMP && date.fromSidecar() {
+		fields = xmpFields(meta(), date)
 	}
 
 	if im.opts.DryRun {
