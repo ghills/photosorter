@@ -34,6 +34,11 @@
 # own when the library has files but the database is empty.
 # no_sync = false
 
+# Don't write XMP sidecars (-no-xmp). Normally a file dated from its Takeout JSON
+# gets IMG_1234.jpg.xmp next to it, carrying over Google's capture time, location,
+# description, people and favourite flag.
+# no_xmp = false
+
 # Show what would happen without writing anything (-dry-run).
 # dry_run = false
 

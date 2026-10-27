@@ -213,9 +213,7 @@ func TestRun_UsesSidecarDateInConfiguredZone(t *testing.T) {
 		if report.Imported[DateFromJSONTaken] != 1 {
 			t.Errorf("%s: report = %+v", tc.zone, report)
 		}
-		if names := listDir(t, filepath.Join(im.opts.Library, tc.want)); len(names) != 1 {
-			t.Errorf("%s: expected a.jpg in %s", tc.zone, tc.want)
-		}
+		readFile(t, im.opts.Library, tc.want, "a.jpg")
 	}
 }
 

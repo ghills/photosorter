@@ -38,6 +38,10 @@ func TestEXIFDate(t *testing.T) {
 			if got.Format(time.DateTime) != taken.Format(time.DateTime) {
 				t.Errorf("got %v, want wall clock %v", got, taken.Format(time.DateTime))
 			}
+			// The test files record no UTC offset.
+			if EXIFHasZone(got) {
+				t.Errorf("got zone %v, want none recorded", got.Location())
+			}
 		})
 	}
 }

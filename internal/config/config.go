@@ -66,6 +66,10 @@ type Config struct {
 	// database does not know about (-no-sync).
 	NoSync bool `toml:"no_sync"`
 
+	// NoXMP stops XMP sidecars being written for files dated from their Takeout
+	// sidecar (-no-xmp).
+	NoXMP bool `toml:"no_xmp"`
+
 	// DryRun goes through the import without writing anything (-dry-run).
 	DryRun bool `toml:"dry_run"`
 

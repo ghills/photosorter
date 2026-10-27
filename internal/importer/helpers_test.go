@@ -24,6 +24,8 @@ type memFile struct {
 	size    int64  // reported by Size(); may deliberately disagree with len(content)
 	sidecar string // sidecar JSON; "" for none
 	opens   atomic.Int32
+
+	sidecarOpens atomic.Int32
 }
 
 func (m *memFile) Name() string { return m.name }
@@ -36,6 +38,7 @@ func (m *memFile) OpenSidecar() (io.ReadCloser, bool) {
 	if m.sidecar == "" {
 		return nil, false
 	}
+	m.sidecarOpens.Add(1)
 	return io.NopCloser(bytes.NewReader([]byte(m.sidecar))), true
 }
 

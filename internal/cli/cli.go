@@ -328,6 +328,7 @@ func (r *runner) importAll(ctx context.Context, db *library.DB, sources []source
 		Workers:        r.cfg.Workers,
 		BufferLimit:    r.cfg.BufferLimit(),
 		SkipVideosUpTo: r.cfg.ShortVideoLimit(),
+		NoXMP:          r.cfg.NoXMP,
 		DryRun:         r.cfg.DryRun,
 		Location:       loc,
 		Log:            logger,

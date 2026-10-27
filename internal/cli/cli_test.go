@@ -115,12 +115,18 @@ func TestRun_EndToEnd(t *testing.T) {
 		t.Errorf("expected an automatic sync of the existing library:\n%s", out)
 	}
 
+	// Files dated from their sidecar get an XMP sidecar too.
 	want := []string{
 		"2022/2022-07-08/IMG_0002-edited.jpg", // edited copy dated by the original's sidecar
+		"2022/2022-07-08/IMG_0002-edited.jpg.xmp",
 		"2022/2022-07-08/IMG_0002.jpg",
-		"2023/2023-03-04/IMG_0001.jpg",                                    // supplemental-metadata sidecar
+		"2022/2022-07-08/IMG_0002.jpg.xmp",
+		"2023/2023-03-04/IMG_0001.jpg", // supplemental-metadata sidecar
+		"2023/2023-03-04/IMG_0001.jpg.xmp",
 		"2023/2023-05-11/a_very_long_file_name_without_any_date_here.jpg", // truncated sidecar
+		"2023/2023-05-11/a_very_long_file_name_without_any_date_here.jpg.xmp",
 		"Albums/Hawaii/beach.jpg",
+		"Albums/Hawaii/beach.jpg.xmp",
 		"Unknown_Date/mystery.png",
 		"old/existing.jpg", // pre-existing; its copy in the zip was skipped
 	}
@@ -144,6 +150,7 @@ func TestRun_ConfigFileLayoutAndFilter(t *testing.T) {
 	lib := filepath.Join(dir, "Library")
 	writeFile(t, filepath.Join(lib, "photosorter.toml"), `
 tz = "UTC"
+no_xmp = true
 [layout]
 date_format = "2006/01"
 albums = "ignore"
@@ -164,7 +171,7 @@ exclude_ext = ["png"]
 		"2023/2023-03/beach.jpg", // albums ignored
 		"2023/2023-05/a_very_long_file_name_without_any_date_here.jpg",
 		"Undated/copy_of_existing.jpg",
-		// mystery.png excluded by the extension filter
+		// mystery.png excluded by the extension filter; no XMP sidecars (no_xmp)
 	}
 	if got := mediaIn(t, lib); strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("library contents:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -244,6 +251,8 @@ func TestRun_PruneAllowsReimportOfDeletedFiles(t *testing.T) {
 	if err := os.Remove(victim); err != nil {
 		t.Fatal(err)
 	}
+	// Its XMP sidecar too: one left behind would keep the name taken.
+	os.Remove(victim + ".xmp")
 
 	if code, out := runCLI(t, "-out", lib, "-dry-run", "-prune"); code != ExitOK || !strings.Contains(out, "Would prune 1 cached hash") {
 		t.Fatalf("dry-run prune: exit %d\n%s", code, out)
@@ -325,14 +334,20 @@ func TestRun_Reorganize(t *testing.T) {
 	if code != ExitOK || !strings.Contains(out, "Moved 5 folder(s)") || !strings.Contains(out, "Misc (1 of 1 media files have no date)") {
 		t.Fatalf("reorganize: exit %d\n%s", code, out)
 	}
+	// XMP sidecars move with their folders.
 	want := []string{
 		"2021/Road trip/IMG_20210601_101010.jpg",
 		"2022/2022-07-08/IMG_0002-edited.jpg",
+		"2022/2022-07-08/IMG_0002-edited.jpg.xmp",
 		"2022/2022-07-08/IMG_0002.jpg",
+		"2022/2022-07-08/IMG_0002.jpg.xmp",
 		"2023/2023-03-04/IMG_0001.jpg",
+		"2023/2023-03-04/IMG_0001.jpg.xmp",
 		"2023/2023-05-11 renamed by hand/x.jpg",
 		"2023/2023-05-11/a_very_long_file_name_without_any_date_here.jpg",
+		"2023/2023-05-11/a_very_long_file_name_without_any_date_here.jpg.xmp",
 		"Albums/Hawaii/beach.jpg",
+		"Albums/Hawaii/beach.jpg.xmp",
 		"Misc/photo.jpg", // undated, so left where it is
 		"Unknown_Date/copy_of_existing.jpg",
 		"Unknown_Date/mystery.png",

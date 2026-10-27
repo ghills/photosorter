@@ -3,7 +3,8 @@
 PhotoSorter imports [Google Takeout](https://takeout.google.com/) exports of Google Photos into a plain folder-based photo library on your own disk. It also takes any other folder or zip of photos, and lets you give a date or a name to batches you add by hand.
 
 - **No duplicates.** Every file in the library is identified by a hash of its content. Anything already in the library is skipped, whether it was imported before, came from an earlier Takeout, or was put there by hand.
-- **Correct dates.** Each file goes into a dated folder based on its EXIF data, Google's JSON sidecar files, or failing those, the date in its file name. Google often strips EXIF from exported media, so the sidecars matter.
+- **Correct dates.** Each file goes into a dated folder based on its EXIF data, Google's JSON sidecar files, or failing those, the date in its file name. Google often strips EXIF from exported media, so the sidecars matter. Each file's modification time is set to that date too, for viewers that sort by it.
+- **Google's metadata kept.** When a file's date had to come from its sidecar, PhotoSorter writes an XMP sidecar next to it with the capture time, location, description, people and favourite flag that Google stripped from the file.
 - **Albums kept.** Media from your Google Photos albums can stay grouped as albums.
 - **Works on the zips directly.** No need to extract multi-gigabyte archives first. Extracted folders work too.
 
@@ -153,6 +154,8 @@ For each file, PhotoSorter uses the first of these that works:
 
 If none of them works, the file goes to `Unknown_Date/`, or gets the `-fallback-date` if you gave one. A `-date` replaces all of these (see [Adding photos by hand](#adding-photos-by-hand)).
 
+The imported copy's modification time is set to the date it was filed under, so file browsers and viewers that sort by it show photos in the order they were taken. EXIF times, `-date` and `-fallback-date` have no time zone, so they are read in the `-tz` zone; a `-date 2019-07` file gets midnight on July 1st. Files with no date keep the time they were copied. Files imported before this feature keep their old modification times.
+
 Sidecar timestamps and movie header times are absolute instants, so the day they fall on depends on the time zone. PhotoSorter uses the machine's zone unless you pass `-tz`. EXIF times and Apple video creation dates are local times and are used exactly as recorded. A few cameras write their local time into the movie header instead of UTC; their videos can land a day off around midnight.
 
 ### Sidecar matching
@@ -168,6 +171,20 @@ Takeout is inconsistent about naming sidecars. For `IMG_1234.jpg`, PhotoSorter l
 | `IMG_1234.jpg(1).json` | Describes the duplicate `IMG_1234(1).jpg`; the counter moves to the end |
 
 Edited copies (`IMG_1234-edited.jpg`, plus the German, French, Italian and Spanish variants) use the original's sidecar when they have none of their own. Sidecars are matched across every zip in the run.
+
+## XMP sidecars
+
+Takeout removes EXIF from many files and keeps their metadata only in the JSON sidecar. When PhotoSorter has to date a file from that sidecar, it also writes an XMP sidecar next to the imported copy, so other photo software can read the metadata. The sidecar is named after the full file name, `IMG_1234.jpg.xmp`, which digiKam, darktable and ExifTool read. The media file itself is never changed.
+
+| Takeout JSON | XMP |
+| --- | --- |
+| `photoTakenTime` | `exif:DateTimeOriginal` and `photoshop:DateCreated`, in the `-tz` zone with its UTC offset |
+| `geoData`, or `geoDataExif` if `geoData` is empty | `exif:GPSLatitude`, `exif:GPSLongitude`, `exif:GPSAltitude` |
+| `description` | `dc:description` |
+| `people` | `Iptc4xmpExt:PersonInImage` |
+| `favorited` | `xmp:Rating` of 5 |
+
+An XMP sidecar is written only for files dated from the JSON ("dated from JSON" in the summary). Files dated from EXIF, the video header, the file name or `-date` keep their own metadata and get none. A file dated from `creationTime` gets no capture time in its XMP, because that is the upload time; if it has none of the other fields either, no XMP is written. An existing `.xmp` file is never replaced; this is logged and counted as a failed sidecar, and the file is still imported. `-reorganize` moves sidecars along with their folders. Pass `-no-xmp` to turn sidecars off.
 
 ## Duplicate detection
 
@@ -220,6 +237,7 @@ Positional arguments are inputs: folders are imported like `-in`, and anything e
 | `-prune` | off | Sync, then forget cached hashes of files no longer in the library so they can be imported again |
 | `-reorganize` | off | Move dated folders at the top of the library into year folders (see [Reorganizing](#reorganizing-an-existing-library)) |
 | `-no-sync` | off | Never sync automatically (`-nosync` is still accepted) |
+| `-no-xmp` | off | Don't write [XMP sidecars](#xmp-sidecars) for files dated from their Takeout JSON |
 | `-dry-run` | off | Go through the import without writing anything to the library (files, database or log) |
 | `-workers <n>` | 8 | Files processed concurrently |
 | `-max-buffer-mb <MB>` | 16 | Files up to this size are read once and kept in memory for hashing, dating and copying. 0 disables this. Peak memory is about `workers × MB` |
@@ -273,7 +291,8 @@ exclude_ext = ["gif"]
                                3 skip short videos (optional)
                                4 date: EXIF → sidecar → video header → file name
                                5 choose folder (layout)
-                               6 copy via temp file, link into place, record hash
+                               6 copy via temp file, link into place, set mtime, record hash
+                               7 XMP sidecar, if dated from the JSON sidecar
 ```
 
 Copies are written to a temporary file and then hard-linked into place under a free name (or, on filesystems without hard links, renamed over a reserved name), so an interrupted run never leaves a half-written photo. With album folders on, album files from every input are imported before the rest, so a photo Takeout also placed in a year folder always lands in its album. Only one import should run on a library at a time. Hashes are committed to the database in batches by a background writer. If the database stops accepting writes, the run stops, because otherwise files would be imported but not remembered.
@@ -299,6 +318,7 @@ CI runs these steps plus [staticcheck](https://staticcheck.dev/) on Linux and ma
 | [`internal/takeout`](internal/takeout) | Takeout specifics: sidecar matching, sidecar JSON, album folders |
 | [`internal/media`](internal/media) | Media file types, EXIF (JPEG, TIFF, HEIC) and file-name dates, MP4 duration and recording time |
 | [`internal/library`](internal/library) | The hash database, content hashing, library sync, reorganizing into year folders |
+| [`internal/xmp`](internal/xmp) | Encoding and writing XMP sidecar files |
 | [`internal/importer`](internal/importer) | The per-file import pipeline, folder layout, atomic writes, run report |
 | [`internal/parallel`](internal/parallel) | Shared worker pool with a progress bar |
 

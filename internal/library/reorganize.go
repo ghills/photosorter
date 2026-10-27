@@ -17,6 +17,7 @@ import (
 
 	"photosorter/internal/media"
 	"photosorter/internal/parallel"
+	"photosorter/internal/xmp"
 )
 
 // ReorganizeOptions configures [Reorganize].
@@ -321,14 +322,24 @@ func (r *reorganizer) moveFolder(from, to string) {
 }
 
 // mergeDir moves the contents of the folder from into the existing folder to, then
-// removes from if that left it empty.
+// removes from if that left it empty. A file's XMP sidecar follows it to whatever name
+// it ends up with.
 func (r *reorganizer) mergeDir(from, to string) {
 	entries, err := os.ReadDir(r.abs(from))
 	if err != nil {
 		r.fail(from, err)
 		return
 	}
+	files := make(map[string]bool, len(entries))
 	for _, e := range entries {
+		if !e.IsDir() {
+			files[e.Name()] = true
+		}
+	}
+	for _, e := range entries {
+		if name, ok := strings.CutSuffix(e.Name(), xmp.Ext); ok && files[name] && !e.IsDir() {
+			continue // moved with its file
+		}
 		src, dst := filepath.Join(from, e.Name()), filepath.Join(to, e.Name())
 		info, err := os.Lstat(r.abs(dst))
 		switch {
@@ -347,9 +358,9 @@ func (r *reorganizer) mergeDir(from, to string) {
 		case e.IsDir() || (err == nil && info.IsDir()):
 			r.fail(src, fmt.Errorf("%s exists as a different kind of entry", dst))
 		case err != nil: // a file, and its name is free
-			r.moveFile(src, dst)
+			r.moveSidecar(src, r.moveFile(src, dst), files)
 		default:
-			r.mergeFile(src, dst)
+			r.moveSidecar(src, r.mergeFile(src, dst), files)
 		}
 		if r.dbErr != nil {
 			return
@@ -390,36 +401,72 @@ func (r *reorganizer) moved(from, to string) {
 }
 
 // mergeFile handles the file from whose name is already taken at to: an identical
-// copy is removed, different content is moved under a "_N" name.
-func (r *reorganizer) mergeFile(from, to string) {
+// copy is removed, different content is moved under a "_N" name. It returns the name
+// the content now has, or "" on failure.
+func (r *reorganizer) mergeFile(from, to string) string {
 	same, hash, err := sameContent(r.abs(from), r.abs(to))
 	if err != nil {
 		r.fail(from, err)
-		return
+		return ""
 	}
 	// .DS_Store files are Finder's per-folder settings, not library content.
 	if same || filepath.Base(from) == ".DS_Store" {
 		if !r.dryRun {
 			if err := os.Remove(r.abs(from)); err != nil {
 				r.fail(from, err)
-				return
+				return ""
 			}
 		}
 		r.res.Duplicates = append(r.res.Duplicates, from)
 		if r.filter.MatchIn(r.root, r.abs(from)) {
 			r.mediaRemoved++
 		}
-		return
+		return to
 	}
 
 	placed := r.moveFile(from, freeName(r.abs(to), r.root))
 	if placed == "" {
-		return
+		return ""
 	}
 	r.res.Renamed = append(r.res.Renamed, Move{From: from, To: placed})
 	if r.filter.MatchIn(r.root, r.abs(placed)) {
 		if err := r.db.SetFilename(hash, filepath.Base(placed)); err != nil {
 			r.dbErr = err
+		}
+	}
+	return placed
+}
+
+// moveSidecar moves the XMP sidecar of the file from, if files (the names in from's
+// folder) has one, next to the file's new name to. It does nothing if to is "": the
+// file could not be moved, and its sidecar stays with it. A sidecar already at the new
+// name is kept; an identical one replaces the moved one, a different one is reported.
+func (r *reorganizer) moveSidecar(from, to string, files map[string]bool) {
+	if to == "" || !files[filepath.Base(xmp.SidecarPath(from))] {
+		return
+	}
+	src, dst := xmp.SidecarPath(from), xmp.SidecarPath(to)
+	_, err := os.Lstat(r.abs(dst))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		if !r.dryRun {
+			if err := os.Rename(r.abs(src), r.abs(dst)); err != nil {
+				r.fail(src, err)
+			}
+		}
+	case err != nil:
+		r.fail(src, err)
+	default:
+		same, _, err := sameContent(r.abs(src), r.abs(dst))
+		switch {
+		case err != nil:
+			r.fail(src, err)
+		case !same:
+			r.fail(src, fmt.Errorf("%s already has a different sidecar", to))
+		case !r.dryRun:
+			if err := os.Remove(r.abs(src)); err != nil {
+				r.fail(src, err)
+			}
 		}
 	}
 }
@@ -430,7 +477,7 @@ func freeName(path, root string) string {
 	stem := strings.TrimSuffix(path, ext)
 	for n := 1; ; n++ {
 		candidate := fmt.Sprintf("%s_%d%s", stem, n, ext)
-		if _, err := os.Lstat(candidate); errors.Is(err, fs.ErrNotExist) {
+		if _, err := os.Lstat(candidate); errors.Is(err, fs.ErrNotExist) && !hasSidecar(candidate) {
 			rel, _ := filepath.Rel(root, candidate)
 			return rel
 		}
