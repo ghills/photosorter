@@ -59,8 +59,9 @@ func TestRun_FallbackDateAndHandAddedFiles(t *testing.T) {
 
 func TestUsage_GroupsEveryVisibleFlag(t *testing.T) {
 	var cfgPath string
+	var ui bool
 	cfg, _, _ := parse(t, "-out", t.TempDir(), "-sync")
-	fs := newFlagSet(&cfg, &cfgPath, nil)
+	fs := newFlagSet(&cfg, &cfgPath, &ui, nil)
 
 	seen := map[string]int{}
 	for _, g := range flagGroups {

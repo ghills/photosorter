@@ -6,6 +6,10 @@
 //
 // Status messages go to stdout; warnings, errors and progress bars go to stderr. A
 // detailed per-file log is written to the library folder.
+//
+// With no arguments, or with -ui, it starts the browser interface (package ui)
+// instead. That interface runs imports through [Execute], so both front ends share
+// one pipeline and print the same messages.
 package cli
 
 import (
@@ -25,6 +29,7 @@ import (
 	"photosorter/internal/library"
 	"photosorter/internal/media"
 	"photosorter/internal/source"
+	"photosorter/internal/ui"
 )
 
 // Exit codes.
@@ -37,10 +42,13 @@ const (
 // maxListed caps how many unreadable or failed paths are printed to the terminal.
 const maxListed = 10
 
+// serveUI starts the browser interface. Tests replace it so no browser opens.
+var serveUI = ui.Serve
+
 // Run executes PhotoSorter with the given arguments (without the program name) and
 // returns the process exit code. Cancelling ctx stops the run gracefully.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	cfg, err := parseArgs(args, stderr)
+	p, err := parseArgs(args, stderr)
 	if errors.Is(err, flag.ErrHelp) {
 		return ExitOK
 	}
@@ -48,6 +56,26 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "error: %v\nRun 'photosorter -h' for usage.\n", err)
 		return ExitFailure
 	}
+	if p.ui {
+		err := serveUI(ctx, ui.Options{
+			Initial:    p.cfg,
+			ConfigFile: p.configFile,
+			Execute:    Execute,
+			Stdout:     stdout,
+			Stderr:     stderr,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return ExitFailure
+		}
+		return ExitOK
+	}
+	return Execute(ctx, p.cfg, stdout, stderr)
+}
+
+// Execute performs one run with settings that have already been resolved and
+// validated, and returns its exit code. Cancelling ctx stops the run gracefully.
+func Execute(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) int {
 	r := &runner{cfg: cfg, stdout: stdout, stderr: stderr}
 	return r.run(ctx)
 }
