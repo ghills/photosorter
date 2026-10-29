@@ -15,6 +15,10 @@ const (
 	pickZips   = "zips"   // one or more zip files
 )
 
+// showPicker shows the system's folder or file picker (see pick). It is killed when
+// ctx ends. Tests replace it.
+var showPicker = pick
+
 // runPicker runs a dialog command and returns the paths it prints, one per line.
 // Every picker used exits non-zero when the user cancels, either silently or, for
 // osascript, with error -128. That is not an error: it returns no paths.

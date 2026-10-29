@@ -38,6 +38,12 @@ type Options struct {
 	// ConfigFile is the config file Initial was loaded from, or "".
 	ConfigFile string
 
+	// Reload resolves Initial again, the way the program did when it started: the
+	// defaults, the config file as it is now, then the flags given with -ui. Runs into
+	// the initial library use it, so edits to its config file apply without a
+	// restart. If nil, Initial is used as it is.
+	Reload func() (cfg config.Config, configFile string, err error)
+
 	// Execute performs one run with validated settings and returns its exit code, as
 	// cli.Execute does.
 	Execute func(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) int
@@ -103,6 +109,7 @@ func newServer(ctx context.Context, opts Options) (*server, error) {
 	if _, err := rand.Read(b); err != nil {
 		return nil, err
 	}
+	opts.Initial = absolute(opts.Initial)
 	return &server{
 		ctx:     ctx,
 		opts:    opts,
@@ -214,16 +221,11 @@ func formFrom(cfg config.Config) form {
 // apply puts the form's settings onto cfg. Every field the page shows replaces
 // what cfg had, so the page is always what runs.
 func (f form) apply(cfg *config.Config) {
-	cfg.Library = f.Library
+	cfg.Library = expandHome(strings.TrimSpace(f.Library))
 	cfg.Folders, cfg.Zips = nil, nil
 	for _, in := range f.Inputs {
-		if in = expandHome(strings.TrimSpace(in)); in == "" {
-			continue
-		}
-		if info, err := os.Stat(in); err == nil && info.IsDir() {
-			cfg.Folders = append(cfg.Folders, in)
-		} else {
-			cfg.Zips = append(cfg.Zips, in)
+		if in = expandHome(strings.TrimSpace(in)); in != "" {
+			cfg.AddInput(in)
 		}
 	}
 	date := strings.TrimSpace(f.Date)
@@ -248,9 +250,15 @@ func (f form) apply(cfg *config.Config) {
 }
 
 // validate catches what the settings can't: a chosen option whose field was left
-// empty would otherwise quietly do nothing.
+// empty would otherwise quietly do nothing, and a relative path would be read from a
+// working directory the user can't see.
 func (f form) validate() error {
 	var errs []error
+	for _, p := range append([]string{f.Library}, f.Inputs...) {
+		if _, err := fullPath(p); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	if f.DateMode != "" && strings.TrimSpace(f.Date) == "" {
 		errs = append(errs, errors.New("enter a date (YYYY, YYYY-MM or YYYY-MM-DD), or choose to use each file's own date"))
 	}
@@ -258,6 +266,39 @@ func (f form) validate() error {
 		errs = append(errs, fmt.Errorf("enter the %s name, or choose dated folders only", f.NameMode))
 	}
 	return errors.Join(errs...)
+}
+
+// fullPath expands a leading ~ in a path from the page, and rejects a relative one.
+// Someone who double-clicked the program can't know its working directory, so a
+// relative path would land somewhere unexpected.
+func fullPath(p string) (string, error) {
+	p = expandHome(strings.TrimSpace(p))
+	if p != "" && !filepath.IsAbs(p) {
+		return p, fmt.Errorf("%q is not a full path: choose it with the button, or type the whole path", p)
+	}
+	return p, nil
+}
+
+// absolute returns cfg with its library and input paths made absolute. Paths from
+// the command line are relative to the folder the program started in, which the
+// page can't show, and paths the page sends back must be full paths.
+func absolute(cfg config.Config) config.Config {
+	abs := func(p string) string {
+		if a, err := filepath.Abs(p); err == nil && p != "" {
+			return a
+		}
+		return p
+	}
+	cfg.Library = abs(cfg.Library)
+	folders, zips := cfg.Folders, cfg.Zips
+	cfg.Folders, cfg.Zips = nil, nil
+	for _, p := range folders {
+		cfg.Folders = append(cfg.Folders, abs(p))
+	}
+	for _, p := range zips {
+		cfg.Zips = append(cfg.Zips, abs(p))
+	}
+	return cfg
 }
 
 // expandHome replaces a leading ~ with the home folder, as a shell would on the
@@ -275,11 +316,16 @@ func expandHome(p string) string {
 
 // baseConfig returns the settings a run into library starts from, and the config
 // file they came from. For the library the program started with, that's the
-// initial settings, so flags given with -ui still apply. For any other library it's
+// initial settings resolved again (see [Options.Reload]), so flags given with -ui
+// still apply and the config file is read as it is now. For any other library it's
 // the defaults plus that library's photosorter.toml.
 func (s *server) baseConfig(library string) (config.Config, string, error) {
 	if filepath.Clean(library) == filepath.Clean(s.opts.Initial.Library) {
-		return s.opts.Initial, s.opts.ConfigFile, nil
+		if s.opts.Reload == nil {
+			return s.opts.Initial, s.opts.ConfigFile, nil
+		}
+		cfg, path, err := s.opts.Reload()
+		return absolute(cfg), path, err
 	}
 	cfg := config.Default()
 	path := config.FindFile("", library)
@@ -295,7 +341,11 @@ func (s *server) baseConfig(library string) (config.Config, string, error) {
 func (s *server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	library := s.opts.Initial.Library
 	if r.URL.Query().Has("library") {
-		library = expandHome(strings.TrimSpace(r.URL.Query().Get("library")))
+		var err error
+		if library, err = fullPath(r.URL.Query().Get("library")); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
 	}
 	cfg, path, err := s.baseConfig(library)
 	if err != nil {
@@ -309,7 +359,7 @@ func (s *server) handlePick(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Kind string `json:"kind"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Kind != pickFolder && req.Kind != pickZips) {
+	if err := decodeJSON(r, &req); err != nil || (req.Kind != pickFolder && req.Kind != pickZips) {
 		writeError(w, http.StatusBadRequest, errors.New("kind must be folder or zips"))
 		return
 	}
@@ -318,7 +368,18 @@ func (s *server) handlePick(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.pickMu.Unlock()
-	paths, err := pick(req.Kind)
+	// Close the picker if the page goes away or PhotoSorter quits, so its window
+	// doesn't outlive the program.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	go func() {
+		select {
+		case <-s.quit:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	paths, err := showPicker(ctx, req.Kind)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -332,11 +393,15 @@ func (s *server) handleOpen(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path string `json:"path"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	path := expandHome(req.Path)
+	path, err := fullPath(req.Path)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
 	if info, err := os.Stat(path); err != nil || !info.IsDir() {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("%q is not a folder", req.Path))
 		return
@@ -350,14 +415,14 @@ func (s *server) handleOpen(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleRun(w http.ResponseWriter, r *http.Request) {
 	var f form
-	if err := json.NewDecoder(r.Body).Decode(&f); err != nil {
+	if err := decodeJSON(r, &f); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	f.Library = expandHome(strings.TrimSpace(f.Library))
-	cfg, _, err := s.baseConfig(f.Library)
+	var cfg config.Config
+	err := f.validate()
 	if err == nil {
-		err = f.validate()
+		cfg, _, err = s.baseConfig(expandHome(strings.TrimSpace(f.Library)))
 	}
 	if err == nil {
 		f.apply(&cfg)
@@ -465,6 +530,14 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// decodeJSON reads a request body into v. Unknown fields are an error, so a page and
+// server that disagree on a field's name fail loudly instead of dropping a setting.
+func decodeJSON(r *http.Request, v any) error {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	return dec.Decode(v)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

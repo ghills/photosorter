@@ -1,9 +1,12 @@
 package ui
 
-import "os/exec"
+import (
+	"context"
+	"os/exec"
+)
 
 // pick shows the macOS folder or file chooser through AppleScript.
-func pick(kind string) ([]string, error) {
+func pick(ctx context.Context, kind string) ([]string, error) {
 	script := []string{`POSIX path of (choose folder with prompt "Choose a folder")`}
 	if kind == pickZips {
 		script = []string{
@@ -19,7 +22,7 @@ func pick(kind string) ([]string, error) {
 	for _, line := range script {
 		args = append(args, "-e", line)
 	}
-	return runPicker(exec.Command("osascript", args...))
+	return runPicker(exec.CommandContext(ctx, "osascript", args...))
 }
 
 // openPath opens a URL in the default browser, or a folder in Finder.

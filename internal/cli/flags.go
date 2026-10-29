@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"photosorter/internal/config"
@@ -65,11 +64,7 @@ func parseArgs(args []string, stderr io.Writer) (parsedArgs, error) {
 	})
 
 	for _, arg := range fs.Args() {
-		if info, err := os.Stat(arg); err == nil && info.IsDir() {
-			p.cfg.Folders = append(p.cfg.Folders, arg)
-		} else {
-			p.cfg.Zips = append(p.cfg.Zips, arg)
-		}
+		p.cfg.AddInput(arg)
 	}
 	if p.ui {
 		return p, nil

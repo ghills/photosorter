@@ -76,7 +76,7 @@ The page has the same choices as the common flags:
 | Dry run, Google Photos albums | `-dry-run`, `-albums` |
 | Library maintenance | `-sync`, `-rehash`, `-prune`, `-reorganize` |
 
-Every other setting comes from the library's `photosorter.toml` (see [Configuration](#configuration)), and the page says which file it used. A run prints the same output and writes the same log file as the command line. **Stop** stops it the way Ctrl-C does, so it's safe to run again.
+Every other setting comes from the library's `photosorter.toml` (see [Configuration](#configuration)), and the page says which file it used. The file is read again for every run, so you can edit it while the page is open. Paths typed into the page must be full paths, such as `/Users/you/Pictures` or `C:\Photos`; a leading `~` means your home folder. A run prints the same output and writes the same log file as the command line. **Stop** stops it the way Ctrl-C does, so it's safe to run again.
 
 The program keeps running while the page is open. Close it with **Quit PhotoSorter** on the page, or with Ctrl-C or by closing its terminal window. The page is served only to this computer (on `127.0.0.1`), from inside the program, and is protected by a random token in its address.
 

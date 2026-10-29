@@ -10,8 +10,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -189,20 +193,56 @@ func TestServer_Settings(t *testing.T) {
 	}
 }
 
+func TestServer_InitialLibraryIsReloadedWithFullPaths(t *testing.T) {
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := config.Default()
+	initial.Library, initial.Folders = "Library", []string{"in"} // as given on the command line
+	s, ts, fake := testServer(t, initial)
+	reloads := 0
+	s.opts.Reload = func() (config.Config, string, error) {
+		reloads++
+		cfg := initial
+		cfg.Workers = 7 // as if the config file was edited since startup
+		return cfg, "", nil
+	}
+
+	var got settings
+	call(t, s, ts, "GET", "/api/settings", nil, &got)
+	lib := filepath.Join(dir, "Library")
+	if got.Form.Library != lib || !reflect.DeepEqual(got.Form.Inputs, []string{filepath.Join(dir, "in")}) {
+		t.Errorf("form library %q, inputs %q; want full paths under %s", got.Form.Library, got.Form.Inputs, dir)
+	}
+
+	if code := call(t, s, ts, "POST", "/api/run", form{Library: lib, Sync: true}, nil); code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	close(fake.release)
+	stream(t, s, ts, isDone)
+	if cfg := fake.last(); cfg.Workers != 7 || reloads != 2 {
+		t.Errorf("run workers = %d after %d reloads; want 7 after 2", cfg.Workers, reloads)
+	}
+}
+
 func TestServer_RunValidatesTheForm(t *testing.T) {
 	s, ts, _ := testServer(t, config.Default())
 	lib := t.TempDir()
+	zip := filepath.Join(lib, "x.zip")
 	tests := map[string]struct {
 		form form
 		want string
 	}{
-		"no library":         {form{Inputs: []string{"x.zip"}}, "library folder is required"},
+		"no library":         {form{Inputs: []string{zip}}, "library folder is required"},
 		"nothing to do":      {form{Library: lib}, "nothing to do"},
-		"bad date":           {form{Library: lib, Inputs: []string{"x.zip"}, DateMode: "date", Date: "July"}, "-date"},
-		"date left empty":    {form{Library: lib, Inputs: []string{"x.zip"}, DateMode: "fallback", Date: " "}, "enter a date"},
-		"name left empty":    {form{Library: lib, Inputs: []string{"x.zip"}, NameMode: "album"}, "enter the album name"},
-		"bad album name":     {form{Library: lib, Inputs: []string{"x.zip"}, NameMode: "album", Name: "a/b"}, "-album"},
+		"bad date":           {form{Library: lib, Inputs: []string{zip}, DateMode: "date", Date: "July"}, "-date"},
+		"date left empty":    {form{Library: lib, Inputs: []string{zip}, DateMode: "fallback", Date: " "}, "enter a date"},
+		"name left empty":    {form{Library: lib, Inputs: []string{zip}, NameMode: "album"}, "enter the album name"},
+		"bad album name":     {form{Library: lib, Inputs: []string{zip}, NameMode: "album", Name: "a/b"}, "-album"},
 		"unknown album mode": {form{Library: lib, Sync: true, Albums: "maybe"}, "albums must be"},
+		"relative library":   {form{Library: "Pictures/Library", Sync: true}, `"Pictures/Library" is not a full path`},
+		"relative input":     {form{Library: lib, Inputs: []string{"takeout.zip"}}, `"takeout.zip" is not a full path`},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -215,6 +255,44 @@ func TestServer_RunValidatesTheForm(t *testing.T) {
 	}
 }
 
+func TestServer_RunRejectsUnknownFields(t *testing.T) {
+	s, ts, _ := testServer(t, config.Default())
+	body := map[string]any{"library": t.TempDir(), "sync": true, "dry_run": true}
+	var reply map[string]string
+	if code := call(t, s, ts, "POST", "/api/run", body, &reply); code != http.StatusBadRequest || !strings.Contains(reply["error"], "dry_run") {
+		t.Errorf("status %d, error %q; want 400 naming dry_run", code, reply["error"])
+	}
+}
+
+// TestPageSendsTheFormFields keeps the page's readForm and the form struct in step.
+// The server rejects fields it doesn't know, so a mismatch would otherwise only show
+// up when someone pressed Start.
+func TestPageSendsTheFormFields(t *testing.T) {
+	page, err := static.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, body, ok := strings.Cut(string(page), "function readForm() {")
+	body, _, ok2 := strings.Cut(body, "};")
+	if !ok || !ok2 {
+		t.Fatal("readForm not found in index.html")
+	}
+	var sent []string
+	for _, m := range regexp.MustCompile(`(?m)^\s*(\w+)\s*[:,]`).FindAllStringSubmatch(body, -1) {
+		sent = append(sent, m[1])
+	}
+	var fields []string
+	typ := reflect.TypeFor[form]()
+	for i := range typ.NumField() {
+		fields = append(fields, typ.Field(i).Tag.Get("json"))
+	}
+	slices.Sort(sent)
+	slices.Sort(fields)
+	if !slices.Equal(sent, fields) {
+		t.Errorf("readForm sends %q, but form has %q", sent, fields)
+	}
+}
+
 func TestServer_RunMapsFormToSettings(t *testing.T) {
 	initial := config.Default()
 	initial.Library = t.TempDir()
@@ -224,7 +302,7 @@ func TestServer_RunMapsFormToSettings(t *testing.T) {
 
 	f := form{
 		Library:  initial.Library,
-		Inputs:   []string{folder, "takeout-*.zip", " "},
+		Inputs:   []string{folder, filepath.Join(folder, "takeout-*.zip"), " "},
 		DateMode: "date", Date: " 2019-07-04 ",
 		NameMode: "event", Name: "Fireworks",
 		DryRun: true, Albums: config.AlbumsIgnore, Reorganize: true,
@@ -238,7 +316,7 @@ func TestServer_RunMapsFormToSettings(t *testing.T) {
 	got := fake.last()
 	want := initial
 	want.Folders = []string{folder}
-	want.Zips = []string{"takeout-*.zip"}
+	want.Zips = []string{filepath.Join(folder, "takeout-*.zip")}
 	want.Manual = config.Manual{Date: "2019-07-04", Event: "Fireworks"}
 	want.DryRun, want.Reorganize = true, true
 	want.Layout.Albums = config.AlbumsIgnore
@@ -301,6 +379,50 @@ func TestServer_QuitStopsTheRun(t *testing.T) {
 	}
 	if code := call(t, s, ts, "POST", "/api/run", form{Library: t.TempDir(), Sync: true}, nil); code != http.StatusConflict {
 		t.Errorf("run after quit: status %d, want 409", code)
+	}
+}
+
+func TestServer_QuitClosesTheFilePicker(t *testing.T) {
+	opened, closed := make(chan struct{}), make(chan error, 1)
+	orig := showPicker
+	showPicker = func(ctx context.Context, kind string) ([]string, error) {
+		close(opened)
+		<-ctx.Done() // a real picker's process is killed here
+		closed <- ctx.Err()
+		return nil, nil
+	}
+	t.Cleanup(func() { showPicker = orig })
+	s, ts, _ := testServer(t, config.Default())
+
+	go func() {
+		b, _ := json.Marshal(map[string]string{"kind": pickFolder})
+		req, _ := http.NewRequest("POST", ts.URL+"/api/pick", bytes.NewReader(b))
+		req.Header.Set(tokenHeader, s.token)
+		if res, err := http.DefaultClient.Do(req); err == nil {
+			res.Body.Close()
+		}
+	}()
+	<-opened
+	call(t, s, ts, "POST", "/api/quit", struct{}{}, nil)
+	select {
+	case err := <-closed:
+		if err == nil {
+			t.Error("picker context ended without an error")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("quitting did not close the picker")
+	}
+}
+
+func TestRunPicker_KilledPickerReturnsNoPaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs sleep(1)")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	paths, err := runPicker(exec.CommandContext(ctx, "sleep", "10"))
+	if paths != nil || err != nil {
+		t.Errorf("runPicker = %q, %v; want no paths and no error, as for a cancelled dialog", paths, err)
 	}
 }
 

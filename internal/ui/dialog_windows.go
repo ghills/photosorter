@@ -1,6 +1,9 @@
 package ui
 
-import "os/exec"
+import (
+	"context"
+	"os/exec"
+)
 
 // pickerPrelude makes PowerShell print UTF-8, so paths with accents survive, and
 // gives the dialog a topmost owner so it doesn't open behind the browser.
@@ -10,7 +13,7 @@ $owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true}
 `
 
 // pick shows the Windows folder or file dialog through PowerShell.
-func pick(kind string) ([]string, error) {
+func pick(ctx context.Context, kind string) ([]string, error) {
 	script := pickerPrelude + `$d = New-Object System.Windows.Forms.FolderBrowserDialog
 $d.Description = 'Choose a folder'
 if ($d.ShowDialog($owner) -eq 'OK') { $d.SelectedPath }
@@ -23,7 +26,7 @@ $d.Multiselect = $true
 if ($d.ShowDialog($owner) -eq 'OK') { $d.FileNames }
 `
 	}
-	return runPicker(exec.Command("powershell", "-NoProfile", "-STA", "-Command", script))
+	return runPicker(exec.CommandContext(ctx, "powershell", "-NoProfile", "-STA", "-Command", script))
 }
 
 // openPath opens a URL in the default browser, or a folder in Explorer.

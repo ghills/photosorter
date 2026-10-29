@@ -272,6 +272,17 @@ func FindFile(explicit, library string) string {
 	return ""
 }
 
+// AddInput adds a path to import from, the way positional command-line arguments are
+// read: an existing folder goes to Folders, anything else (a zip file, or a glob
+// pattern of them) to Zips.
+func (c *Config) AddInput(path string) {
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		c.Folders = append(c.Folders, path)
+	} else {
+		c.Zips = append(c.Zips, path)
+	}
+}
+
 // Validate checks that the settings are usable together.
 func (c Config) Validate() error {
 	var errs []error
