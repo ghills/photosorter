@@ -45,7 +45,6 @@ type console struct {
 	redraw   bool // the text in partial follows a "\r"
 	backlog  []event
 	progress string
-	running  bool
 	subs     map[chan event]struct{}
 }
 
@@ -58,7 +57,6 @@ func (c *console) begin() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.partial, c.redraw, c.backlog, c.progress = nil, false, nil, ""
-	c.running = true
 	c.add(event{Type: "start"})
 }
 
@@ -71,15 +69,7 @@ func (c *console) end(code int) {
 	}
 	c.partial, c.redraw = nil, false
 	c.setProgress("")
-	c.running = false
 	c.add(event{Type: "done", Code: code})
-}
-
-// isRunning reports whether a run is in progress.
-func (c *console) isRunning() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.running
 }
 
 func (c *console) Write(p []byte) (int, error) {
@@ -140,7 +130,8 @@ func clean(s string) string {
 // add appends ev to the backlog and sends it to every page.
 func (c *console) add(ev event) {
 	if len(c.backlog) == maxBacklog {
-		c.backlog = append(c.backlog[:0], c.backlog[1:]...)
+		// Slicing off the front is O(1); append reallocates once the capacity runs out.
+		c.backlog = c.backlog[1:]
 	}
 	c.backlog = append(c.backlog, ev)
 	c.broadcast(ev)

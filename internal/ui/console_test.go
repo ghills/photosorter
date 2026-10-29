@@ -49,9 +49,6 @@ func TestConsole_LinesAndProgress(t *testing.T) {
 	if want := []string{" 10% |#   |", " 50% |##  |", ""}; !reflect.DeepEqual(progress, want) {
 		t.Errorf("progress = %q, want %q", progress, want)
 	}
-	if c.isRunning() {
-		t.Error("still running after end")
-	}
 }
 
 func TestConsole_SnapshotCatchesUp(t *testing.T) {

@@ -109,7 +109,7 @@ func newServer(ctx context.Context, opts Options) (*server, error) {
 	if _, err := rand.Read(b); err != nil {
 		return nil, err
 	}
-	opts.Initial = absolute(opts.Initial)
+	opts.Initial, opts.ConfigFile = absolute(opts.Initial), absPath(opts.ConfigFile)
 	return &server{
 		ctx:     ctx,
 		opts:    opts,
@@ -188,7 +188,6 @@ type form struct {
 type settings struct {
 	Form       form   `json:"form"`
 	ConfigFile string `json:"configFile"`
-	Running    bool   `json:"running"`
 }
 
 // formFrom describes cfg as the page shows it.
@@ -283,22 +282,36 @@ func fullPath(p string) (string, error) {
 // the command line are relative to the folder the program started in, which the
 // page can't show, and paths the page sends back must be full paths.
 func absolute(cfg config.Config) config.Config {
-	abs := func(p string) string {
-		if a, err := filepath.Abs(p); err == nil && p != "" {
-			return a
-		}
-		return p
-	}
-	cfg.Library = abs(cfg.Library)
+	cfg.Library = absPath(cfg.Library)
 	folders, zips := cfg.Folders, cfg.Zips
 	cfg.Folders, cfg.Zips = nil, nil
 	for _, p := range folders {
-		cfg.Folders = append(cfg.Folders, abs(p))
+		cfg.Folders = append(cfg.Folders, absPath(p))
 	}
 	for _, p := range zips {
-		cfg.Zips = append(cfg.Zips, abs(p))
+		cfg.Zips = append(cfg.Zips, absPath(p))
 	}
 	return cfg
+}
+
+// absPath returns p made absolute, or p itself if it is empty or can't be.
+func absPath(p string) string {
+	if a, err := filepath.Abs(p); err == nil && p != "" {
+		return a
+	}
+	return p
+}
+
+// sameFolder reports whether a and b name the same folder. When both exist they are
+// compared as files, so different spellings of one folder (letter case on macOS and
+// Windows, a symlink) still match.
+func sameFolder(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ai, errA := os.Stat(a)
+	bi, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(ai, bi)
 }
 
 // expandHome replaces a leading ~ with the home folder, as a shell would on the
@@ -320,12 +333,12 @@ func expandHome(p string) string {
 // still apply and the config file is read as it is now. For any other library it's
 // the defaults plus that library's photosorter.toml.
 func (s *server) baseConfig(library string) (config.Config, string, error) {
-	if filepath.Clean(library) == filepath.Clean(s.opts.Initial.Library) {
+	if sameFolder(library, s.opts.Initial.Library) {
 		if s.opts.Reload == nil {
 			return s.opts.Initial, s.opts.ConfigFile, nil
 		}
 		cfg, path, err := s.opts.Reload()
-		return absolute(cfg), path, err
+		return absolute(cfg), absPath(path), err
 	}
 	cfg := config.Default()
 	path := config.FindFile("", library)
@@ -352,7 +365,7 @@ func (s *server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(w, settings{Form: formFrom(cfg), ConfigFile: path, Running: s.console.isRunning()})
+	writeJSON(w, settings{Form: formFrom(cfg), ConfigFile: path})
 }
 
 func (s *server) handlePick(w http.ResponseWriter, r *http.Request) {

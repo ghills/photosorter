@@ -205,7 +205,12 @@ let inputs = [];
 let running = false;
 let lastLibrary = null;
 let lastDryRun = false;
+let runLibrary = "";
 let events = null;
+// loadSeq numbers settings requests, so only the latest reply is shown. touched holds
+// the options the user changed since that request, which its reply must not undo.
+let loadSeq = 0;
+const touched = new Set();
 
 async function api(path, body) {
   const opts = { headers: { "X-PhotoSorter-Token": token } };
@@ -296,9 +301,8 @@ function readForm() {
 // doesn't throw away what was entered.
 function fillOptions(s, first) {
   const f = s.form;
-  $("dryRun").checked = f.dryRun;
-  $("albums").value = f.albums || "folder";
-  for (const id of ["sync", "rehash", "prune", "reorganize"]) $(id).checked = f[id];
+  for (const id of ["dryRun", "sync", "rehash", "prune", "reorganize"]) if (!touched.has(id)) $(id).checked = f[id];
+  if (!touched.has("albums")) $("albums").value = f.albums || "folder";
   if (first) {
     $("library").value = f.library || "";
     inputs = f.inputs || [];
@@ -317,9 +321,13 @@ function fillOptions(s, first) {
 async function loadSettings(first) {
   const lib = $("library").value.trim();
   const q = first ? "" : "?library=" + encodeURIComponent(lib);
+  const seq = ++loadSeq;
+  touched.clear();
   try {
-    fillOptions(await api("/api/settings" + q), first);
+    const s = await api("/api/settings" + q);
+    if (seq === loadSeq) fillOptions(s, first);
   } catch (e) {
+    if (seq !== loadSeq) return;
     banner("err", e.message);
   }
 }
@@ -341,7 +349,7 @@ async function choose(kind) {
 
 function showDone(code) {
   if (code === 0) {
-    const lib = $("library").value.trim();
+    const lib = runLibrary || $("library").value.trim(); // empty if the page was reloaded mid-run
     banner("ok", lastDryRun ? "Dry run finished. Nothing was changed." : "Finished.",
       lastDryRun || !lib ? null : { label: "Open library folder", onclick: () => api("/api/open", { path: lib }).catch((e) => banner("err", e.message)) });
   } else if (code === 130) {
@@ -397,11 +405,13 @@ $("typedInput").addEventListener("keydown", (e) => {
   e.target.value = "";
 });
 document.querySelectorAll("input[type=radio]").forEach((r) => r.addEventListener("change", updateFields));
-document.querySelectorAll("input[type=checkbox]").forEach((c) => c.addEventListener("change", updateStart));
+document.querySelectorAll("input[type=checkbox]").forEach((c) => c.addEventListener("change", () => { touched.add(c.id); updateStart(); }));
+$("albums").addEventListener("change", () => touched.add("albums"));
 
 $("start").onclick = async () => {
   banner("", "");
   lastDryRun = $("dryRun").checked;
+  runLibrary = $("library").value.trim();
   try {
     await api("/api/run", readForm());
   } catch (e) {

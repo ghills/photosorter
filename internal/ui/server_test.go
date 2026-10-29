@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,11 +53,16 @@ func (f *fakeRun) last() config.Config {
 	return f.cfgs[len(f.cfgs)-1]
 }
 
-// testServer starts the interface's handler with fake runs.
-func testServer(t *testing.T, initial config.Config) (*server, *httptest.Server, *fakeRun) {
+// testServer starts the interface's handler with fake runs. reload, if given, is
+// its [Options.Reload].
+func testServer(t *testing.T, initial config.Config, reload ...func() (config.Config, string, error)) (*server, *httptest.Server, *fakeRun) {
 	t.Helper()
 	fake := &fakeRun{release: make(chan struct{})}
-	s, err := newServer(context.Background(), Options{Initial: initial, Execute: fake.execute, Stdout: io.Discard, Stderr: io.Discard})
+	opts := Options{Initial: initial, Execute: fake.execute, Stdout: io.Discard, Stderr: io.Discard}
+	if len(reload) > 0 {
+		opts.Reload = reload[0]
+	}
+	s, err := newServer(context.Background(), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,14 +206,13 @@ func TestServer_InitialLibraryIsReloadedWithFullPaths(t *testing.T) {
 	}
 	initial := config.Default()
 	initial.Library, initial.Folders = "Library", []string{"in"} // as given on the command line
-	s, ts, fake := testServer(t, initial)
-	reloads := 0
-	s.opts.Reload = func() (config.Config, string, error) {
-		reloads++
+	var reloads atomic.Int32
+	s, ts, fake := testServer(t, initial, func() (config.Config, string, error) {
+		reloads.Add(1)
 		cfg := initial
 		cfg.Workers = 7 // as if the config file was edited since startup
 		return cfg, "", nil
-	}
+	})
 
 	var got settings
 	call(t, s, ts, "GET", "/api/settings", nil, &got)
@@ -221,8 +226,8 @@ func TestServer_InitialLibraryIsReloadedWithFullPaths(t *testing.T) {
 	}
 	close(fake.release)
 	stream(t, s, ts, isDone)
-	if cfg := fake.last(); cfg.Workers != 7 || reloads != 2 {
-		t.Errorf("run workers = %d after %d reloads; want 7 after 2", cfg.Workers, reloads)
+	if cfg := fake.last(); cfg.Workers != 7 || reloads.Load() != 2 {
+		t.Errorf("run workers = %d after %d reloads; want 7 after 2", cfg.Workers, reloads.Load())
 	}
 }
 
@@ -423,6 +428,56 @@ func TestRunPicker_KilledPickerReturnsNoPaths(t *testing.T) {
 	paths, err := runPicker(exec.CommandContext(ctx, "sleep", "10"))
 	if paths != nil || err != nil {
 		t.Errorf("runPicker = %q, %v; want no paths and no error, as for a cancelled dialog", paths, err)
+	}
+}
+
+func TestRunPicker_CancelCodes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs sh(1)")
+	}
+	cancelWithWarning := func() *exec.Cmd {
+		return exec.Command("sh", "-c", "echo 'Gtk-Message: mapped without a transient parent' >&2; exit 1")
+	}
+	if paths, err := runPicker(cancelWithWarning(), 1); paths != nil || err != nil {
+		t.Errorf("with cancel code 1: %q, %v; want a cancel", paths, err)
+	}
+	if _, err := runPicker(cancelWithWarning()); err == nil || !strings.Contains(err.Error(), "Gtk-Message") {
+		t.Errorf("without cancel codes: err = %v; want the message as an error", err)
+	}
+}
+
+func TestServer_InitialLibraryMatchedAsAFolder(t *testing.T) {
+	initial := config.Default()
+	initial.Library = t.TempDir()
+	initial.DryRun = true // as if given with -ui
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(initial.Library, link); err != nil {
+		t.Skip("cannot make a symlink:", err)
+	}
+	s, ts, _ := testServer(t, initial)
+	var got settings
+	call(t, s, ts, "GET", "/api/settings?library="+link, nil, &got)
+	if !got.Form.DryRun {
+		t.Errorf("the initial library through a symlink lost its -ui settings: %+v", got.Form)
+	}
+}
+
+func TestServer_ConfigFileShownAsFullPath(t *testing.T) {
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeRun{release: make(chan struct{})}
+	s, err := newServer(context.Background(), Options{Initial: config.Default(), ConfigFile: "my.toml", Execute: fake.execute, Stdout: io.Discard, Stderr: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s.handler())
+	t.Cleanup(func() { s.shutdown(); ts.Close() })
+	var got settings
+	call(t, s, ts, "GET", "/api/settings", nil, &got)
+	if want := filepath.Join(dir, "my.toml"); got.ConfigFile != want {
+		t.Errorf("config file shown as %q, want %q", got.ConfigFile, want)
 	}
 }
 
