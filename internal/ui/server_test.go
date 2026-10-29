@@ -176,7 +176,7 @@ func TestServer_Settings(t *testing.T) {
 	if code := call(t, s, ts, "GET", "/api/settings", nil, &got); code != http.StatusOK {
 		t.Fatalf("status = %d", code)
 	}
-	want := form{Library: initial.Library, Inputs: []string{"/photos"}, DateMode: "fallback", Date: "1998", NameMode: "event", Name: "Scans", DryRun: true, Albums: initial.Layout.Albums}
+	want := form{Task: taskImport, Library: initial.Library, Inputs: []string{"/photos"}, DateMode: "fallback", Date: "1998", NameMode: "event", Name: "Scans", DryRun: true, Albums: initial.Layout.Albums}
 	if !reflect.DeepEqual(got.Form, want) {
 		t.Errorf("initial form = %+v, want %+v", got.Form, want)
 	}
@@ -187,7 +187,7 @@ func TestServer_Settings(t *testing.T) {
 	os.WriteFile(path, []byte("sync = true\n[layout]\nalbums = \"ignore\"\n"), 0644)
 	got = settings{}
 	call(t, s, ts, "GET", "/api/settings?library="+other, nil, &got)
-	if got.ConfigFile != path || !got.Form.Sync || got.Form.Albums != "ignore" || got.Form.DryRun || got.Form.Library != other {
+	if got.ConfigFile != path || !got.Form.Sync || got.Form.Task != taskMaintain || got.Form.Albums != "ignore" || got.Form.DryRun || got.Form.Library != other {
 		t.Errorf("other library settings = %+v", got)
 	}
 
@@ -221,7 +221,7 @@ func TestServer_InitialLibraryIsReloadedWithFullPaths(t *testing.T) {
 		t.Errorf("form library %q, inputs %q; want full paths under %s", got.Form.Library, got.Form.Inputs, dir)
 	}
 
-	if code := call(t, s, ts, "POST", "/api/run", form{Library: lib, Sync: true}, nil); code != http.StatusOK {
+	if code := call(t, s, ts, "POST", "/api/run", form{Task: taskMaintain, Library: lib, Sync: true}, nil); code != http.StatusOK {
 		t.Fatalf("status = %d", code)
 	}
 	close(fake.release)
@@ -239,15 +239,17 @@ func TestServer_RunValidatesTheForm(t *testing.T) {
 		form form
 		want string
 	}{
-		"no library":         {form{Inputs: []string{zip}}, "library folder is required"},
-		"nothing to do":      {form{Library: lib}, "nothing to do"},
-		"bad date":           {form{Library: lib, Inputs: []string{zip}, DateMode: "date", Date: "July"}, "-date"},
-		"date left empty":    {form{Library: lib, Inputs: []string{zip}, DateMode: "fallback", Date: " "}, "enter a date"},
-		"name left empty":    {form{Library: lib, Inputs: []string{zip}, NameMode: "album"}, "enter the album name"},
-		"bad album name":     {form{Library: lib, Inputs: []string{zip}, NameMode: "album", Name: "a/b"}, "-album"},
-		"unknown album mode": {form{Library: lib, Sync: true, Albums: "maybe"}, "albums must be"},
-		"relative library":   {form{Library: "Pictures/Library", Sync: true}, `"Pictures/Library" is not a full path`},
-		"relative input":     {form{Library: lib, Inputs: []string{"takeout.zip"}}, `"takeout.zip" is not a full path`},
+		"no task":            {form{Library: lib, Inputs: []string{zip}}, "task must be"},
+		"no library":         {form{Task: taskImport, Inputs: []string{zip}}, "library folder is required"},
+		"nothing to import":  {form{Task: taskImport, Library: lib, Inputs: []string{" "}, Sync: true}, "add a folder or zip file"},
+		"no maintenance":     {form{Task: taskMaintain, Library: lib, Inputs: []string{zip}}, "choose at least one maintenance task"},
+		"bad date":           {form{Task: taskImport, Library: lib, Inputs: []string{zip}, DateMode: "date", Date: "July"}, "-date"},
+		"date left empty":    {form{Task: taskImport, Library: lib, Inputs: []string{zip}, DateMode: "fallback", Date: " "}, "enter a date"},
+		"name left empty":    {form{Task: taskImport, Library: lib, Inputs: []string{zip}, NameMode: "album"}, "enter the album name"},
+		"bad album name":     {form{Task: taskImport, Library: lib, Inputs: []string{zip}, NameMode: "album", Name: "a/b"}, "-album"},
+		"unknown album mode": {form{Task: taskImport, Library: lib, Inputs: []string{zip}, Albums: "maybe"}, "albums must be"},
+		"relative library":   {form{Task: taskMaintain, Library: "Pictures/Library", Sync: true}, `"Pictures/Library" is not a full path`},
+		"relative input":     {form{Task: taskImport, Library: lib, Inputs: []string{"takeout.zip"}}, `"takeout.zip" is not a full path`},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -262,7 +264,7 @@ func TestServer_RunValidatesTheForm(t *testing.T) {
 
 func TestServer_RunRejectsUnknownFields(t *testing.T) {
 	s, ts, _ := testServer(t, config.Default())
-	body := map[string]any{"library": t.TempDir(), "sync": true, "dry_run": true}
+	body := map[string]any{"task": taskMaintain, "library": t.TempDir(), "sync": true, "dry_run": true}
 	var reply map[string]string
 	if code := call(t, s, ts, "POST", "/api/run", body, &reply); code != http.StatusBadRequest || !strings.Contains(reply["error"], "dry_run") {
 		t.Errorf("status %d, error %q; want 400 naming dry_run", code, reply["error"])
@@ -306,11 +308,13 @@ func TestServer_RunMapsFormToSettings(t *testing.T) {
 	folder := t.TempDir()
 
 	f := form{
+		Task:     taskImport,
 		Library:  initial.Library,
 		Inputs:   []string{folder, filepath.Join(folder, "takeout-*.zip"), " "},
 		DateMode: "date", Date: " 2019-07-04 ",
 		NameMode: "event", Name: "Fireworks",
-		DryRun: true, Albums: config.AlbumsIgnore, Reorganize: true,
+		DryRun: true, Albums: config.AlbumsIgnore,
+		Reorganize: true, // hidden on the import task, so not applied
 	}
 	if code := call(t, s, ts, "POST", "/api/run", f, nil); code != http.StatusOK {
 		t.Fatalf("status = %d", code)
@@ -323,8 +327,41 @@ func TestServer_RunMapsFormToSettings(t *testing.T) {
 	want.Folders = []string{folder}
 	want.Zips = []string{filepath.Join(folder, "takeout-*.zip")}
 	want.Manual = config.Manual{Date: "2019-07-04", Event: "Fireworks"}
-	want.DryRun, want.Reorganize = true, true
+	want.DryRun = true
 	want.Layout.Albums = config.AlbumsIgnore
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("run settings =\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+// TestServer_MaintenanceImportsNothing checks that the import task's fields, which
+// the page hides while maintenance is chosen, don't reach the run.
+func TestServer_MaintenanceImportsNothing(t *testing.T) {
+	initial := config.Default()
+	initial.Library = t.TempDir()
+	initial.Folders = []string{"/photos"} // as if given with -ui
+	initial.Layout.Albums = config.AlbumsIgnore
+	s, ts, fake := testServer(t, initial)
+
+	f := form{
+		Task:     taskMaintain,
+		Library:  initial.Library,
+		Inputs:   []string{t.TempDir()},
+		DateMode: "date", Date: "2019",
+		NameMode: "album", Name: "Wedding",
+		Albums: config.AlbumsFolder,
+		Prune:  true, Reorganize: true,
+	}
+	if code := call(t, s, ts, "POST", "/api/run", f, nil); code != http.StatusOK {
+		t.Fatalf("status = %d", code)
+	}
+	close(fake.release)
+	stream(t, s, ts, isDone)
+
+	got := fake.last()
+	want := initial
+	want.Folders = nil
+	want.Prune, want.Reorganize = true, true
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("run settings =\n%+v\nwant\n%+v", got, want)
 	}
@@ -332,7 +369,7 @@ func TestServer_RunMapsFormToSettings(t *testing.T) {
 
 func TestServer_RunStreamsAndCancels(t *testing.T) {
 	s, ts, _ := testServer(t, config.Default())
-	f := form{Library: t.TempDir(), Sync: true}
+	f := form{Task: taskMaintain, Library: t.TempDir(), Sync: true}
 	if code := call(t, s, ts, "POST", "/api/run", f, nil); code != http.StatusOK {
 		t.Fatalf("status = %d", code)
 	}
@@ -369,7 +406,7 @@ func TestServer_RunStreamsAndCancels(t *testing.T) {
 
 func TestServer_QuitStopsTheRun(t *testing.T) {
 	s, ts, _ := testServer(t, config.Default())
-	call(t, s, ts, "POST", "/api/run", form{Library: t.TempDir(), Sync: true}, nil)
+	call(t, s, ts, "POST", "/api/run", form{Task: taskMaintain, Library: t.TempDir(), Sync: true}, nil)
 	call(t, s, ts, "POST", "/api/quit", struct{}{}, nil)
 
 	done := make(chan struct{})
@@ -382,7 +419,7 @@ func TestServer_QuitStopsTheRun(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("shutdown did not stop the run")
 	}
-	if code := call(t, s, ts, "POST", "/api/run", form{Library: t.TempDir(), Sync: true}, nil); code != http.StatusConflict {
+	if code := call(t, s, ts, "POST", "/api/run", form{Task: taskMaintain, Library: t.TempDir(), Sync: true}, nil); code != http.StatusConflict {
 		t.Errorf("run after quit: status %d, want 409", code)
 	}
 }

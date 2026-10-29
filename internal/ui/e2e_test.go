@@ -39,6 +39,7 @@ func TestImportThroughTheInterface(t *testing.T) {
 	defer shutdown()
 
 	body, _ := json.Marshal(map[string]any{
+		"task":     "import",
 		"library":  lib,
 		"inputs":   []string{src},
 		"dateMode": "fallback",
