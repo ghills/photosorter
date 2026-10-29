@@ -95,6 +95,20 @@ func TestFindFile(t *testing.T) {
 	}
 }
 
+func TestAddInput(t *testing.T) {
+	dir := t.TempDir()
+	var c Config
+	for _, p := range []string{dir, filepath.Join(dir, "takeout.zip"), filepath.Join(dir, "takeout-*.zip")} {
+		c.AddInput(p)
+	}
+	if len(c.Folders) != 1 || c.Folders[0] != dir {
+		t.Errorf("Folders = %q, want [%q]", c.Folders, dir)
+	}
+	if len(c.Zips) != 2 {
+		t.Errorf("Zips = %q, want the zip file and the pattern", c.Zips)
+	}
+}
+
 func TestValidate_Rejects(t *testing.T) {
 	tests := map[string]func(*Config){
 		"missing library":     func(c *Config) { c.Library = "" },

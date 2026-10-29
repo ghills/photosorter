@@ -18,9 +18,9 @@ Ready-to-run builds of the latest `main` are on the [releases page](https://gith
 | Windows on ARM | [`photosorter-windows-arm64.zip`](https://github.com/ghills/photosorter/releases/latest/download/photosorter-windows-arm64.zip) |
 | macOS (Intel and Apple silicon) | [`photosorter-macos-universal.tar.gz`](https://github.com/ghills/photosorter/releases/latest/download/photosorter-macos-universal.tar.gz) |
 
-PhotoSorter is a command-line program: unpack the download and run it from a terminal.
+Unpack the download. Then either double-click `photosorter` to use it from your web browser (see [Using it from your browser](#using-it-from-your-browser)), or run it from a terminal.
 
-- **Windows:** extract the zip, open PowerShell in that folder, and run `.\photosorter.exe -h`. The builds aren't code-signed, so SmartScreen may warn the first time; choose **More info → Run anyway**.
+- **Windows:** extract the zip, then double-click `photosorter.exe`, or open PowerShell in that folder and run `.\photosorter.exe -h`. The builds aren't code-signed, so SmartScreen may warn the first time; choose **More info → Run anyway**.
 - **macOS:** double-click the `.tar.gz` to unpack it, then in Terminal, from that folder:
 
   ```bash
@@ -28,7 +28,7 @@ PhotoSorter is a command-line program: unpack the download and run it from a ter
   ./photosorter -h
   ```
 
-  The `xattr` step clears the "downloaded from the internet" flag; without it macOS refuses to open an unsigned program.
+  The `xattr` step clears the "downloaded from the internet" flag; without it macOS refuses to open an unsigned program. After that, double-clicking `photosorter` in Finder works too.
 
 Each merge to `main` publishes a new build, with a `SHA256SUMS.txt` to verify downloads.
 
@@ -55,6 +55,30 @@ See what would happen first, without writing anything:
 ```
 
 Pass every part of a multi-part export in the same run. A sidecar sometimes ends up in a different zip from the photo it describes, and PhotoSorter can only pair them when it sees both.
+
+## Using it from your browser
+
+Run PhotoSorter with no arguments (or double-click it), or with `-ui`, and it opens a page in your web browser instead of working on the command line:
+
+```bash
+./photosorter
+./photosorter -ui -out ~/Pictures/Library   # flags given with -ui prefill the page
+```
+
+The page has the same choices as the common flags:
+
+| On the page | Flag |
+| --- | --- |
+| Library | `-out` |
+| Import from (folders and zips, picked with your system's file dialog or typed) | positional inputs, `-in`, `-zip` |
+| Give every file this date / Only date the files that have no date | `-date` / `-fallback-date` |
+| Add an event name / Put everything in one album | `-event` / `-album` |
+| Dry run, Google Photos albums | `-dry-run`, `-albums` |
+| Library maintenance | `-sync`, `-rehash`, `-prune`, `-reorganize` |
+
+Every other setting comes from the library's `photosorter.toml` (see [Configuration](#configuration)), and the page says which file it used. The file is read again for every run, so you can edit it while the page is open. Paths typed into the page must be full paths, such as `/Users/you/Pictures` or `C:\Photos`; a leading `~` means your home folder. A run prints the same output and writes the same log file as the command line. **Stop** stops it the way Ctrl-C does, so it's safe to run again.
+
+The program keeps running while the page is open. Close it with **Quit PhotoSorter** on the page, or with Ctrl-C or by closing its terminal window. The page is served only to this computer (on `127.0.0.1`), from inside the program, and is protected by a random token in its address.
 
 ## Common recipes
 
@@ -218,6 +242,7 @@ Add `-dry-run` to list what would be pruned without changing the database. As a 
 
 ```
 photosorter -out <library> [flags] [takeout.zip | folder ...]
+photosorter [-ui] [flags]          # browser interface
 ```
 
 Positional arguments are inputs: folders are imported like `-in`, and anything else like `-zip`.
@@ -232,6 +257,7 @@ Positional arguments are inputs: folders are imported like `-in`, and anything e
 | `-event <name>` | | Add a name to the dated folders: `2019/2019-07-04 Fireworks/`. Command line only |
 | `-album <name>` | | Put everything from this run in `Albums/<name>/`. Command line only |
 | `-config <file>` | `<out>/photosorter.toml` | Load settings from this TOML file |
+| `-ui` | on with no arguments | Open the [browser interface](#using-it-from-your-browser), prefilled from any other flags. Command line only |
 | `-sync` | off | Hash files in the library that are new or changed since the last sync |
 | `-rehash` | off | Like `-sync`, but hash every file even if unchanged |
 | `-prune` | off | Sync, then forget cached hashes of files no longer in the library so they can be imported again |
@@ -312,7 +338,7 @@ CI runs these steps plus [staticcheck](https://staticcheck.dev/) on Linux and ma
 | Path | Responsibility |
 | --- | --- |
 | [`main.go`](main.go) | Entry point: signal handling, then `cli.Run` |
-| [`internal/cli`](internal/cli) | Flag parsing, config loading, orchestrating a run, exit codes, log file |
+| [`internal/cli`](internal/cli) | Flag parsing, config loading, orchestrating a run, exit codes, log file; starts `ui` with no arguments or `-ui` |
 | [`internal/config`](internal/config) | The `Config` struct, defaults, TOML loading, validation |
 | [`internal/source`](internal/source) | Zip and folder inputs, behind the `Source`/`File` interfaces |
 | [`internal/takeout`](internal/takeout) | Takeout specifics: sidecar matching, sidecar JSON, album folders |
@@ -321,6 +347,7 @@ CI runs these steps plus [staticcheck](https://staticcheck.dev/) on Linux and ma
 | [`internal/xmp`](internal/xmp) | Encoding and writing XMP sidecar files |
 | [`internal/importer`](internal/importer) | The per-file import pipeline, folder layout, atomic writes, run report |
 | [`internal/parallel`](internal/parallel) | Shared worker pool with a progress bar |
+| [`internal/ui`](internal/ui) | The browser interface: local web server, embedded page, native file pickers |
 
 Each package has a doc comment that explains its role in more detail (`go doc ./internal/importer`).
 

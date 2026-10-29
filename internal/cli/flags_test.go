@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -16,8 +17,11 @@ import (
 func parse(t *testing.T, args ...string) (config.Config, string, error) {
 	t.Helper()
 	var stderr bytes.Buffer
-	cfg, err := parseArgs(args, &stderr)
-	return cfg, stderr.String(), err
+	p, err := parseArgs(args, &stderr)
+	if p.ui {
+		t.Fatalf("parseArgs(%q) chose the browser interface", args)
+	}
+	return p.cfg, stderr.String(), err
 }
 
 func TestParseArgs_Defaults(t *testing.T) {
@@ -138,12 +142,49 @@ func TestParseArgs_Help(t *testing.T) {
 	if !errors.Is(err, flag.ErrHelp) {
 		t.Fatalf("err = %v, want flag.ErrHelp", err)
 	}
-	for _, want := range []string{"Usage:", "Common tasks", "-date 2019-07-04 -event Fireworks", "-fallback-date 1998", "-album Wedding", "-date YYYY[-MM[-DD]]", "-out", "-no-sync", "-date-format", "photosorter.example.toml"} {
+	for _, want := range []string{"Usage:", "Common tasks", "-date 2019-07-04 -event Fireworks", "-fallback-date 1998", "-album Wedding", "-date YYYY[-MM[-DD]]", "-out", "-no-sync", "-date-format", "photosorter.example.toml", "-ui"} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("help text missing %q", want)
 		}
 	}
 	if strings.Contains(stderr, "-nosync") {
 		t.Error("help text shows the deprecated -nosync flag")
+	}
+}
+
+func TestParseArgs_UI(t *testing.T) {
+	lib := t.TempDir()
+	path := filepath.Join(lib, config.FileName)
+	os.WriteFile(path, []byte("workers = 3\n"), 0644)
+	tests := map[string]struct {
+		args   []string
+		wantUI bool
+	}{
+		"no arguments":            {nil, true},
+		"-ui alone":               {[]string{"-ui"}, true},
+		"-ui with settings":       {[]string{"-ui", "-out", lib, "-dry-run"}, true},
+		"-ui=false is the CLI":    {[]string{"-ui=false", "-out", lib, "-sync"}, false},
+		"other flags run the CLI": {[]string{"-out", lib, "-sync"}, false},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			p, err := parseArgs(tt.args, io.Discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.ui != tt.wantUI {
+				t.Errorf("ui = %v, want %v", p.ui, tt.wantUI)
+			}
+		})
+	}
+
+	// The UI's settings are layered like the CLI's but not validated: with -ui,
+	// "nothing to do" is not an error yet.
+	p, err := parseArgs([]string{"-ui", "-out", lib}, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.cfg.Library != lib || p.cfg.Workers != 3 || p.configFile != path {
+		t.Errorf("cfg = %+v, configFile = %q", p.cfg, p.configFile)
 	}
 }

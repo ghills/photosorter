@@ -16,7 +16,8 @@ CI (`.github/workflows/ci.yml`) runs gofmt, vet, staticcheck and race tests on u
 
 `main.go` only sets up signals and calls `cli.Run`. Everything else is under `internal/`. Each package has a `doc.go` that explains its design. Read it before changing the package.
 
-- `cli`: flag parsing (`flags.go`, which parses twice so the config file can sit under flags), run orchestration, and the summary output.
+- `cli`: flag parsing (`flags.go`, which parses twice so the config file can sit under flags), run orchestration, and the summary output. `Execute` runs already-resolved settings; with no arguments or `-ui`, `Run` starts `ui` instead.
+- `ui`: browser interface. It's a local server on 127.0.0.1 with a token, and the page is `static/index.html` (embedded, no CDN). Runs go through `cli.Execute`, which it receives as a func so it never imports `cli`. File pickers shell out to osascript, PowerShell, zenity or kdialog (`dialog_*.go`, build-tagged). Its form shows only the common settings; everything else comes from the toml.
 - `config`: settings struct. Layers are defaults, then TOML file (`-config` or `<library>/photosorter.toml`), then explicitly set flags.
 - `importer`: per-file pipeline (hash → claim in DB → date → `Layout` folder → temp-file copy → mtime → XMP sidecar). The steps are listed in `doc.go`.
 - `library`: SQLite hash DB (`.photosorter_cache.db`, pure-Go `glebarez/go-sqlite`, no cgo), incremental `Sync`, `Reorganize`, and `PlaceFile` (never overwrites; adds a `_N` suffix).
@@ -41,7 +42,7 @@ CI (`.github/workflows/ci.yml`) runs gofmt, vet, staticcheck and race tests on u
 3. Document it in `photosorter.example.toml`. `TestExampleFileIsValid` parses this file, and unknown keys are rejected.
 4. Update README.md.
 
-Per-run flags (`-date`, `-fallback-date`, `-event`, `-album`) are CLI-only by design.
+Per-run flags (`-date`, `-fallback-date`, `-event`, `-album`, `-ui`) are CLI-only by design. If a setting should also be on the browser page, add it to `ui.form` (`formFrom` and `apply`) and to `index.html`.
 
 ## Tests
 

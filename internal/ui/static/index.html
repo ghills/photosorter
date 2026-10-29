@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhotoSorter</title>
+<style>
+  :root {
+    --bg: #f6f6f4;
+    --panel: #ffffff;
+    --text: #1d1d1b;
+    --muted: #6b6b66;
+    --border: #dddcd6;
+    --accent: #2f6fdb;
+    --accent-text: #ffffff;
+    --field: #ffffff;
+    --log-bg: #f1f0ec;
+    --ok: #1f7a3a;
+    --ok-bg: #e5f4e9;
+    --warn: #8a5a00;
+    --warn-bg: #fdf1d6;
+    --err: #b42318;
+    --err-bg: #fde7e5;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615;
+      --panel: #1f1f1d;
+      --text: #ecebe6;
+      --muted: #a09f98;
+      --border: #3a3936;
+      --accent: #5b8ff0;
+      --accent-text: #0d0d0c;
+      --field: #262624;
+      --log-bg: #121211;
+      --ok: #6fcf8a;
+      --ok-bg: #16301f;
+      --warn: #f0c060;
+      --warn-bg: #362a10;
+      --err: #ff8a80;
+      --err-bg: #3a1714;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+  h1 { font-size: 22px; margin: 0; }
+  h2 { font-size: 15px; margin: 0 0 4px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 12px;
+  }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row > input[type=text] { flex: 1 1 240px; min-width: 0; }
+  input[type=text], select {
+    font: inherit;
+    color: var(--text);
+    background: var(--field);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 9px;
+  }
+  input[type=text]:disabled { opacity: .5; }
+  button {
+    font: inherit;
+    color: var(--text);
+    background: var(--field);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; padding: 8px 18px; }
+  button.link { border: none; background: none; color: var(--muted); padding: 2px 4px; }
+  label.choice { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; }
+  label.choice input { margin-top: 3px; }
+  label.choice small { display: block; color: var(--muted); }
+  ul.inputs { list-style: none; margin: 0 0 10px; padding: 0; }
+  ul.inputs li {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+  ul.inputs li span { flex: 1; }
+  ul.inputs li em { font-style: normal; color: var(--muted); font-family: inherit; }
+  .empty { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 20px; }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+  .indent { margin: 4px 0 4px 26px; }
+  details summary { cursor: pointer; font-weight: 600; margin-top: 8px; }
+  .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .banner { border-radius: 8px; padding: 10px 12px; margin: 12px 0 0; white-space: pre-wrap; display: none; }
+  .banner.show { display: block; }
+  .banner.ok { background: var(--ok-bg); color: var(--ok); }
+  .banner.warn { background: var(--warn-bg); color: var(--warn); }
+  .banner.err { background: var(--err-bg); color: var(--err); }
+  .banner button { margin-left: 8px; }
+  #progress {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;
+    color: var(--accent); margin: 12px 0 0; min-height: 1.4em; white-space: pre; overflow: hidden; text-overflow: ellipsis;
+  }
+  #log {
+    background: var(--log-bg); border-radius: 8px; padding: 10px 12px; margin: 6px 0 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;
+    max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  #log:empty::before { content: "Output appears here when a run starts."; color: var(--muted); }
+  #log .warning { color: var(--warn); }
+  #log .error { color: var(--err); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>PhotoSorter</h1>
+    <button class="link" id="quit" title="Stop the PhotoSorter program">Quit PhotoSorter</button>
+  </header>
+
+  <section>
+    <h2>Library</h2>
+    <p class="hint">The folder your sorted photos live in. It's created if it doesn't exist.</p>
+    <div class="row">
+      <input type="text" id="library" placeholder="e.g. /Users/you/Pictures/Library" spellcheck="false">
+      <button data-pick="library">Choose…</button>
+    </div>
+    <p class="hint" id="configNote" style="margin:8px 0 0"></p>
+  </section>
+
+  <section>
+    <h2>Import from</h2>
+    <p class="hint">Google Takeout zips (add every part together), or any folders or zips of photos.</p>
+    <ul class="inputs" id="inputs"></ul>
+    <p class="empty" id="noInputs">Nothing added yet.</p>
+    <div class="row">
+      <button data-pick="folder">Add folder…</button>
+      <button data-pick="zips">Add zip files…</button>
+      <input type="text" id="typedInput" placeholder="…or type a path and press Enter" spellcheck="false">
+    </div>
+  </section>
+
+  <section>
+    <h2>Dates and folder names <span class="hint">(optional, this import only)</span></h2>
+    <label class="choice"><input type="radio" name="dateMode" value="" checked><span>Use each file's own date<small>From EXIF, Takeout data, video headers or the file name.</small></span></label>
+    <label class="choice"><input type="radio" name="dateMode" value="date"><span>Give every file this date<small>Even files that have a date of their own.</small></span></label>
+    <label class="choice"><input type="radio" name="dateMode" value="fallback"><span>Only date the files that have no date<small>Instead of putting them in the unknown-date folder.</small></span></label>
+    <div class="indent row"><input type="text" id="date" placeholder="YYYY, YYYY-MM or YYYY-MM-DD" style="flex:0 1 240px" spellcheck="false"></div>
+    <hr style="border:none;border-top:1px solid var(--border);margin:12px 0">
+    <label class="choice"><input type="radio" name="nameMode" value="" checked><span>Dated folders only</span></label>
+    <label class="choice"><input type="radio" name="nameMode" value="event"><span>Add an event name to the dated folders<small>e.g. 2019/2019-07-04 Fireworks/</small></span></label>
+    <label class="choice"><input type="radio" name="nameMode" value="album"><span>Put everything in one album<small>e.g. Albums/Wedding/</small></span></label>
+    <div class="indent row"><input type="text" id="name" placeholder="Name" style="flex:0 1 240px"></div>
+  </section>
+
+  <section>
+    <h2>Options</h2>
+    <label class="choice"><input type="checkbox" id="dryRun"><span>Dry run<small>Show what would happen without changing anything.</small></span></label>
+    <div class="row" style="margin-top:6px">
+      <label for="albums">Google Photos albums:</label>
+      <select id="albums">
+        <option value="folder">Keep together in album folders</option>
+        <option value="ignore">File by date like everything else</option>
+      </select>
+    </div>
+    <details>
+      <summary>Library maintenance</summary>
+      <div class="grid" style="margin-top:6px">
+        <label class="choice"><input type="checkbox" id="sync"><span>Sync<small>Count files added to the library by hand as imported.</small></span></label>
+        <label class="choice"><input type="checkbox" id="rehash"><span>Rehash<small>Like sync, but re-read every file (after editing photos).</small></span></label>
+        <label class="choice"><input type="checkbox" id="prune"><span>Prune<small>Forget deleted files so they can be imported again.</small></span></label>
+        <label class="choice"><input type="checkbox" id="reorganize"><span>Reorganize<small>Move top-level 2023-05-14/ folders into year folders.</small></span></label>
+      </div>
+    </details>
+  </section>
+
+  <section>
+    <div class="actions">
+      <button class="primary" id="start">Start import</button>
+      <button id="stop" disabled>Stop</button>
+    </div>
+    <div class="banner" id="banner"></div>
+    <div id="progress"></div>
+    <div id="log"></div>
+  </section>
+</main>
+
+<script>
+const token = new URLSearchParams(location.search).get("t") || "";
+const $ = (id) => document.getElementById(id);
+let inputs = [];
+let running = false;
+let lastLibrary = null;
+let lastDryRun = false;
+let runLibrary = "";
+let events = null;
+// loadSeq numbers settings requests, so only the latest reply is shown. touched holds
+// the options the user changed since that request, which its reply must not undo.
+let loadSeq = 0;
+const touched = new Set();
+
+async function api(path, body) {
+  const opts = { headers: { "X-PhotoSorter-Token": token } };
+  if (body !== undefined) {
+    opts.method = "POST";
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function banner(kind, text, action) {
+  const b = $("banner");
+  b.className = "banner" + (kind ? " show " + kind : "");
+  b.textContent = text || "";
+  if (action) {
+    const btn = document.createElement("button");
+    btn.textContent = action.label;
+    btn.onclick = action.onclick;
+    b.append(btn);
+  }
+}
+
+function renderInputs() {
+  const ul = $("inputs");
+  ul.replaceChildren(...inputs.map((p, i) => {
+    const li = document.createElement("li");
+    const span = document.createElement("span");
+    span.textContent = p;
+    const rm = document.createElement("button");
+    rm.className = "link";
+    rm.textContent = "Remove";
+    rm.onclick = () => { inputs.splice(i, 1); renderInputs(); };
+    li.append(span, rm);
+    return li;
+  }));
+  $("noInputs").style.display = inputs.length ? "none" : "";
+  updateStart();
+}
+
+function addInputs(paths) {
+  for (const p of paths) if (p && !inputs.includes(p)) inputs.push(p);
+  renderInputs();
+}
+
+function radio(name) { return document.querySelector(`input[name=${name}]:checked`).value; }
+function setRadio(name, value) {
+  const el = document.querySelector(`input[name=${name}][value="${value || ""}"]`);
+  if (el) el.checked = true;
+}
+
+function updateFields() {
+  $("date").disabled = radio("dateMode") === "";
+  $("name").disabled = radio("nameMode") === "";
+  $("name").placeholder = radio("nameMode") === "album" ? "Album name" : "Event name";
+}
+
+function updateStart() {
+  const dry = $("dryRun").checked;
+  const maintenance = ["sync", "rehash", "prune", "reorganize"].some((id) => $(id).checked);
+  $("start").textContent = dry ? "Preview (dry run)" : (inputs.length || !maintenance ? "Start import" : "Run maintenance");
+  $("start").disabled = running;
+  $("stop").disabled = !running;
+}
+
+function readForm() {
+  return {
+    library: $("library").value.trim(),
+    inputs,
+    dateMode: radio("dateMode"),
+    date: $("date").value,
+    nameMode: radio("nameMode"),
+    name: $("name").value,
+    dryRun: $("dryRun").checked,
+    albums: $("albums").value,
+    sync: $("sync").checked,
+    rehash: $("rehash").checked,
+    prune: $("prune").checked,
+    reorganize: $("reorganize").checked,
+  };
+}
+
+// fillOptions shows the settings that come from the library's config file. The
+// batch fields and inputs only fill in on first load, so changing the library
+// doesn't throw away what was entered.
+function fillOptions(s, first) {
+  const f = s.form;
+  for (const id of ["dryRun", "sync", "rehash", "prune", "reorganize"]) if (!touched.has(id)) $(id).checked = f[id];
+  if (!touched.has("albums")) $("albums").value = f.albums || "folder";
+  if (first) {
+    $("library").value = f.library || "";
+    inputs = f.inputs || [];
+    setRadio("dateMode", f.dateMode); $("date").value = f.date || "";
+    setRadio("nameMode", f.nameMode); $("name").value = f.name || "";
+    renderInputs();
+  }
+  $("configNote").textContent = s.configFile
+    ? "Other settings (workers, folder layout, file types, time zone) come from " + s.configFile + "."
+    : "Other settings use their defaults. Put a photosorter.toml in the library to change them.";
+  lastLibrary = $("library").value.trim();
+  updateFields();
+  updateStart();
+}
+
+async function loadSettings(first) {
+  const lib = $("library").value.trim();
+  const q = first ? "" : "?library=" + encodeURIComponent(lib);
+  const seq = ++loadSeq;
+  touched.clear();
+  try {
+    const s = await api("/api/settings" + q);
+    if (seq === loadSeq) fillOptions(s, first);
+  } catch (e) {
+    if (seq !== loadSeq) return;
+    banner("err", e.message);
+  }
+}
+
+async function choose(kind) {
+  try {
+    const { paths } = await api("/api/pick", { kind: kind === "library" ? "folder" : kind });
+    if (!paths || !paths.length) return;
+    if (kind === "library") {
+      $("library").value = paths[0];
+      loadSettings(false);
+    } else {
+      addInputs(paths);
+    }
+  } catch (e) {
+    banner("err", e.message);
+  }
+}
+
+function showDone(code) {
+  if (code === 0) {
+    const lib = runLibrary || $("library").value.trim(); // empty if the page was reloaded mid-run
+    banner("ok", lastDryRun ? "Dry run finished. Nothing was changed." : "Finished.",
+      lastDryRun || !lib ? null : { label: "Open library folder", onclick: () => api("/api/open", { path: lib }).catch((e) => banner("err", e.message)) });
+  } else if (code === 130) {
+    banner("warn", "Stopped. Finished files were recorded, so it's safe to run again.");
+  } else {
+    banner("err", "Finished with problems. See the output below and the log file in the library.");
+  }
+}
+
+function connect() {
+  events = new EventSource("/api/events?t=" + encodeURIComponent(token));
+  const log = $("log");
+  events.onmessage = (msg) => {
+    const ev = JSON.parse(msg.data);
+    switch (ev.type) {
+      case "reset":
+        log.replaceChildren();
+        $("progress").textContent = "";
+        break;
+      case "start":
+        log.replaceChildren();
+        running = true;
+        banner("", "");
+        updateStart();
+        break;
+      case "line": {
+        const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+        const div = document.createElement("div");
+        div.textContent = ev.text || "​";
+        if (ev.kind) div.className = ev.kind;
+        log.append(div);
+        if (atBottom) log.scrollTop = log.scrollHeight;
+        break;
+      }
+      case "progress":
+        $("progress").textContent = ev.text || "";
+        break;
+      case "done":
+        running = false;
+        $("progress").textContent = "";
+        updateStart();
+        showDone(ev.code);
+        break;
+    }
+  };
+}
+
+document.querySelectorAll("[data-pick]").forEach((b) => b.onclick = () => choose(b.dataset.pick));
+$("library").addEventListener("change", () => { if ($("library").value.trim() !== lastLibrary) loadSettings(false); });
+$("typedInput").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  addInputs([e.target.value.trim()]);
+  e.target.value = "";
+});
+document.querySelectorAll("input[type=radio]").forEach((r) => r.addEventListener("change", updateFields));
+document.querySelectorAll("input[type=checkbox]").forEach((c) => c.addEventListener("change", () => { touched.add(c.id); updateStart(); }));
+$("albums").addEventListener("change", () => touched.add("albums"));
+
+$("start").onclick = async () => {
+  banner("", "");
+  lastDryRun = $("dryRun").checked;
+  runLibrary = $("library").value.trim();
+  try {
+    await api("/api/run", readForm());
+  } catch (e) {
+    banner("err", e.message);
+  }
+};
+$("stop").onclick = () => api("/api/cancel", {}).catch((e) => banner("err", e.message));
+$("quit").onclick = async () => {
+  if (running && !confirm("A run is in progress. Stop it and quit?")) return;
+  await api("/api/quit", {}).catch(() => {});
+  if (events) events.close();
+  document.querySelector("main").innerHTML = "<h1>PhotoSorter has closed.</h1><p class='hint'>You can close this tab. Run PhotoSorter again to reopen it.</p>";
+};
+
+if (!token) {
+  banner("err", "This page needs the address PhotoSorter printed when it started. Open that address instead.");
+} else {
+  loadSettings(true).then(connect);
+}
+</script>
+</body>
+</html>

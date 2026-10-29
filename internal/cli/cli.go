@@ -6,6 +6,10 @@
 //
 // Status messages go to stdout; warnings, errors and progress bars go to stderr. A
 // detailed per-file log is written to the library folder.
+//
+// With no arguments, or with -ui, it starts the browser interface (package ui)
+// instead. That interface runs imports through [Execute], so both front ends share
+// one pipeline and print the same messages.
 package cli
 
 import (
@@ -25,6 +29,7 @@ import (
 	"photosorter/internal/library"
 	"photosorter/internal/media"
 	"photosorter/internal/source"
+	"photosorter/internal/ui"
 )
 
 // Exit codes.
@@ -37,15 +42,50 @@ const (
 // maxListed caps how many unreadable or failed paths are printed to the terminal.
 const maxListed = 10
 
+// serveUI starts the browser interface. Tests replace it so no browser opens.
+var serveUI = ui.Serve
+
 // Run executes PhotoSorter with the given arguments (without the program name) and
 // returns the process exit code. Cancelling ctx stops the run gracefully.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	cfg, err := parseArgs(args, stderr)
+	p, err := parseArgs(args, stderr)
 	if errors.Is(err, flag.ErrHelp) {
 		return ExitOK
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\nRun 'photosorter -h' for usage.\n", err)
+		return ExitFailure
+	}
+	if p.ui {
+		err := serveUI(ctx, ui.Options{
+			Initial:    p.cfg,
+			ConfigFile: p.configFile,
+			Reload: func() (config.Config, string, error) {
+				p, err := parseArgs(args, io.Discard)
+				return p.cfg, p.configFile, err
+			},
+			Execute: Execute,
+			Stdout:  stdout,
+			Stderr:  stderr,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "error: %v\n", err)
+			return ExitFailure
+		}
+		return ExitOK
+	}
+	return Execute(ctx, p.cfg, stdout, stderr)
+}
+
+// Execute performs one run with already-resolved settings and returns its exit code.
+// Cancelling ctx stops the run gracefully.
+//
+// It validates cfg itself rather than trusting its caller, because the run reads
+// derived values (the time zone, the media filter, the manual dates) without
+// checking them again.
+func Execute(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) int {
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
 		return ExitFailure
 	}
 	r := &runner{cfg: cfg, stdout: stdout, stderr: stderr}
@@ -70,7 +110,7 @@ func (r *runner) errorf(format string, args ...any) {
 }
 
 func (r *runner) run(ctx context.Context) (code int) {
-	r.filter, _ = r.cfg.Filter() // validated by parseArgs
+	r.filter, _ = r.cfg.Filter() // validated by Execute
 
 	sources, err := source.Open(source.Inputs{
 		Folders: r.cfg.Folders,
@@ -222,7 +262,7 @@ func (r *runner) reportPrune(res library.SyncResult) {
 // reports what it did. It returns ExitOK if the run should go on.
 func (r *runner) reorganize(ctx context.Context, db *library.DB) int {
 	logger := r.logger()
-	loc, _ := r.cfg.Location() // validated by parseArgs
+	loc, _ := r.cfg.Location() // validated by Execute
 	// Only the first component of a nested folder setting sits at the top level.
 	top := func(dir string) string { return strings.SplitN(dir, "/", 2)[0] }
 	r.printf("Reorganizing %s into year folders...\n", r.cfg.Library)
@@ -307,8 +347,8 @@ func (r *runner) reorganize(ctx context.Context, db *library.DB) int {
 // to it in the database.
 func (r *runner) importAll(ctx context.Context, db *library.DB, sources []source.Source, libraryFiles int) int {
 	logger := r.logger()
-	loc, _ := r.cfg.Location()                  // validated by parseArgs
-	forced, fallback, _ := r.cfg.Manual.Dates() // validated by parseArgs
+	loc, _ := r.cfg.Location()                  // validated by Execute
+	forced, fallback, _ := r.cfg.Manual.Dates() // validated by Execute
 	if summary := r.manualSummary(); summary != "" {
 		r.printf("%s\n", summary)
 		logger.Print(summary)

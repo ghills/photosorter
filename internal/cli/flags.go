@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"photosorter/internal/config"
@@ -14,6 +13,19 @@ import (
 // replacements. They are left out of the help text.
 var deprecatedFlags = map[string]string{"nosync": "no-sync"}
 
+// parsedArgs is what [parseArgs] finds on the command line.
+type parsedArgs struct {
+	cfg config.Config
+
+	// ui is set by -ui, or by giving no arguments at all (as when the program is
+	// double-clicked). cfg then only prefills the browser interface, so it is not
+	// validated.
+	ui bool
+
+	// configFile is the config file that was loaded, or "".
+	configFile string
+}
+
 // parseArgs resolves the run's settings from defaults, the config file and args.
 //
 // Flags are parsed twice. The first pass only finds -config and -out, which say
@@ -21,27 +33,29 @@ var deprecatedFlags = map[string]string{"nosync": "no-sync"}
 // only flags that were actually given override the file.
 //
 // Positional arguments are inputs: folders become -in, anything else -zip.
-func parseArgs(args []string, stderr io.Writer) (config.Config, error) {
+func parseArgs(args []string, stderr io.Writer) (parsedArgs, error) {
 	probe := config.Default()
 	var configPath string
-	fs := newFlagSet(&probe, &configPath, io.Discard)
+	var ui bool
+	fs := newFlagSet(&probe, &configPath, &ui, io.Discard)
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
 			fs.SetOutput(stderr)
 			fs.Usage()
 		}
-		return config.Config{}, err
+		return parsedArgs{}, err
 	}
 
-	cfg := config.Default()
+	p := parsedArgs{cfg: config.Default(), ui: len(args) == 0}
 	if path := config.FindFile(configPath, probe.Library); path != "" {
-		if err := config.LoadFile(path, &cfg); err != nil {
-			return config.Config{}, err
+		if err := config.LoadFile(path, &p.cfg); err != nil {
+			return parsedArgs{}, err
 		}
+		p.configFile = path
 	}
-	fs = newFlagSet(&cfg, &configPath, io.Discard)
+	fs = newFlagSet(&p.cfg, &configPath, &p.ui, io.Discard)
 	if err := fs.Parse(args); err != nil {
-		return config.Config{}, err
+		return parsedArgs{}, err
 	}
 	fs.Visit(func(f *flag.Flag) {
 		if replacement, ok := deprecatedFlags[f.Name]; ok {
@@ -50,22 +64,22 @@ func parseArgs(args []string, stderr io.Writer) (config.Config, error) {
 	})
 
 	for _, arg := range fs.Args() {
-		if info, err := os.Stat(arg); err == nil && info.IsDir() {
-			cfg.Folders = append(cfg.Folders, arg)
-		} else {
-			cfg.Zips = append(cfg.Zips, arg)
-		}
+		p.cfg.AddInput(arg)
 	}
-	return cfg, cfg.Validate()
+	if p.ui {
+		return p, nil
+	}
+	return p, p.cfg.Validate()
 }
 
 // newFlagSet defines every flag, bound to the fields of cfg. Each flag's default is
 // the value already in cfg, so parsing only changes what is explicitly given.
-func newFlagSet(cfg *config.Config, configPath *string, output io.Writer) *flag.FlagSet {
+func newFlagSet(cfg *config.Config, configPath *string, ui *bool, output io.Writer) *flag.FlagSet {
 	fs := flag.NewFlagSet("photosorter", flag.ContinueOnError)
 	fs.SetOutput(output)
 	fs.Usage = func() { usage(fs) }
 
+	fs.BoolVar(ui, "ui", *ui, "Open the browser interface, prefilled from any other flags given")
 	fs.StringVar(configPath, "config", "", "Read settings from this TOML `file` (default: <out>/"+config.FileName+" if present)")
 
 	fs.StringVar(&cfg.Library, "out", cfg.Library, "Library `folder` to import into (required)")
@@ -109,6 +123,7 @@ and any other folder or zip of photos too.
 
 Usage:
   photosorter -out <library> [flags] [zip | folder ...]
+  photosorter                 (no arguments, or -ui: use it from your web browser)
 
 Common tasks (add -dry-run to any of them to see what would happen first):
 
@@ -160,7 +175,7 @@ var flagGroups = []struct {
 	{"Dates, folders and metadata", []string{"tz", "date-format", "unknown-dir", "albums", "albums-dir", "no-xmp"}},
 	{"Which files", []string{"include-ext", "exclude-ext", "skip-short-videos"}},
 	{"Performance", []string{"workers", "max-buffer-mb"}},
-	{"Configuration", []string{"config"}},
+	{"Configuration", []string{"config", "ui"}},
 }
 
 // usage prints the help text: usageIntro, then the flags by group. Deprecated flags
