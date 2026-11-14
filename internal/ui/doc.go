@@ -17,6 +17,9 @@
 //     without a restart. For another library it's the defaults plus that library's
 //     photosorter.toml. The form's fields go on top, and the page and server reject
 //     fields the other doesn't know, so they can't silently drift apart.
+//   - The page asks first whether to import or to maintain the library, and shows
+//     only that task's fields. The server clears the other task's fields before a
+//     run, so nothing hidden on the page changes what it does.
 //   - Output is the text the command line prints. [console] splits it into lines,
 //     treats carriage-return redraws as the progress bar, and streams both to the
 //     page as server-sent events. A backlog lets a reloaded page catch up.

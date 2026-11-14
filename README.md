@@ -65,16 +65,19 @@ Run PhotoSorter with no arguments (or double-click it), or with `-ui`, and it op
 ./photosorter -ui -out ~/Pictures/Library   # flags given with -ui prefill the page
 ```
 
-The page has the same choices as the common flags:
+The page starts by asking what you want to do: **Import photos** or **Maintain the library**. It then shows only that task's choices, which are the same as the common flags:
 
-| On the page | Flag |
-| --- | --- |
-| Library | `-out` |
-| Import from (folders and zips, picked with your system's file dialog or typed) | positional inputs, `-in`, `-zip` |
-| Give every file this date / Only date the files that have no date | `-date` / `-fallback-date` |
-| Add an event name / Put everything in one album | `-event` / `-album` |
-| Dry run, Google Photos albums | `-dry-run`, `-albums` |
-| Library maintenance | `-sync`, `-rehash`, `-prune`, `-reorganize` |
+| Task | On the page | Flag |
+| --- | --- | --- |
+| Both | Library | `-out` |
+| Both | Dry run | `-dry-run` |
+| Import photos | Import from (folders and zips, picked with your system's file dialog or typed) | positional inputs, `-in`, `-zip` |
+| Import photos | Give every file this date / Only date the files that have no date | `-date` / `-fallback-date` |
+| Import photos | Add an event name / Put everything in one album | `-event` / `-album` |
+| Import photos | Google Photos albums | `-albums` |
+| Maintain the library | Sync, Rehash, Prune, Reorganize (one or more) | `-sync`, `-rehash`, `-prune`, `-reorganize` |
+
+A run does only the task you chose. An import runs no maintenance you didn't see, even if `photosorter.toml` turns it on (the [automatic sync](#duplicate-detection) still happens), and maintenance never imports anything. On the command line you can still combine them in one run. If PhotoSorter was started with maintenance flags and no inputs, such as `-ui -sync`, the page opens on **Maintain the library**.
 
 Every other setting comes from the library's `photosorter.toml` (see [Configuration](#configuration)), and the page says which file it used. The file is read again for every run, so you can edit it while the page is open. Paths typed into the page must be full paths, such as `/Users/you/Pictures` or `C:\Photos`; a leading `~` means your home folder. A run prints the same output and writes the same log file as the command line. **Stop** stops it the way Ctrl-C does, so it's safe to run again.
 

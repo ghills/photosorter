@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -158,9 +159,19 @@ func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Write(page)
 }
 
+// Tasks the page offers. A run does one of them, so the settings of the other
+// task, which the page hides, can't change what it does.
+const (
+	taskImport   = "import"   // import the inputs; no forced maintenance
+	taskMaintain = "maintain" // only the chosen maintenance; nothing is imported
+)
+
 // form is what the page shows and sends: the settings a run commonly needs. The
 // rest come from the config file.
 type form struct {
+	// Task is [taskImport] or [taskMaintain].
+	Task string `json:"task"`
+
 	Library string `json:"library"`
 
 	// Inputs are folders and zip files (or zip glob patterns), told apart the way
@@ -176,12 +187,14 @@ type form struct {
 	NameMode string `json:"nameMode"`
 	Name     string `json:"name"`
 
-	DryRun     bool   `json:"dryRun"`
-	Albums     string `json:"albums"`
-	Sync       bool   `json:"sync"`
-	Rehash     bool   `json:"rehash"`
-	Prune      bool   `json:"prune"`
-	Reorganize bool   `json:"reorganize"`
+	DryRun bool   `json:"dryRun"`
+	Albums string `json:"albums"`
+
+	// The maintenance tasks.
+	Sync       bool `json:"sync"`
+	Rehash     bool `json:"rehash"`
+	Prune      bool `json:"prune"`
+	Reorganize bool `json:"reorganize"`
 }
 
 // settings is the reply to /api/settings.
@@ -190,9 +203,11 @@ type settings struct {
 	ConfigFile string `json:"configFile"`
 }
 
-// formFrom describes cfg as the page shows it.
+// formFrom describes cfg as the page shows it. Settings with maintenance but
+// nothing to import, such as -ui -sync, open on the maintenance task.
 func formFrom(cfg config.Config) form {
 	f := form{
+		Task:       taskImport,
 		Library:    cfg.Library,
 		Inputs:     append(append([]string{}, cfg.Folders...), cfg.Zips...),
 		DryRun:     cfg.DryRun,
@@ -201,6 +216,9 @@ func formFrom(cfg config.Config) form {
 		Rehash:     cfg.Rehash,
 		Prune:      cfg.Prune,
 		Reorganize: cfg.Reorganize,
+	}
+	if len(f.Inputs) == 0 && (f.Sync || f.Rehash || f.Prune || f.Reorganize) {
+		f.Task = taskMaintain
 	}
 	switch m := cfg.Manual; {
 	case m.Date != "":
@@ -218,8 +236,15 @@ func formFrom(cfg config.Config) form {
 }
 
 // apply puts the form's settings onto cfg. Every field the page shows replaces
-// what cfg had, so the page is always what runs.
+// what cfg had, so the page is always what runs. The other task's fields are hidden,
+// so they're cleared rather than applied: an import forces no maintenance (the
+// automatic sync still runs), and maintenance imports nothing.
 func (f form) apply(cfg *config.Config) {
+	if f.Task == taskMaintain {
+		f.Inputs, f.DateMode, f.NameMode, f.Albums = nil, "", "", ""
+	} else {
+		f.Sync, f.Rehash, f.Prune, f.Reorganize = false, false, false, false
+	}
 	cfg.Library = expandHome(strings.TrimSpace(f.Library))
 	cfg.Folders, cfg.Zips = nil, nil
 	for _, in := range f.Inputs {
@@ -253,16 +278,31 @@ func (f form) apply(cfg *config.Config) {
 // working directory the user can't see.
 func (f form) validate() error {
 	var errs []error
-	for _, p := range append([]string{f.Library}, f.Inputs...) {
-		if _, err := fullPath(p); err != nil {
-			errs = append(errs, err)
+	if _, err := fullPath(f.Library); err != nil {
+		errs = append(errs, err)
+	}
+	switch f.Task {
+	case taskImport:
+		for _, p := range f.Inputs {
+			if _, err := fullPath(p); err != nil {
+				errs = append(errs, err)
+			}
 		}
-	}
-	if f.DateMode != "" && strings.TrimSpace(f.Date) == "" {
-		errs = append(errs, errors.New("enter a date (YYYY, YYYY-MM or YYYY-MM-DD), or choose to use each file's own date"))
-	}
-	if f.NameMode != "" && strings.TrimSpace(f.Name) == "" {
-		errs = append(errs, fmt.Errorf("enter the %s name, or choose dated folders only", f.NameMode))
+		if !slices.ContainsFunc(f.Inputs, func(p string) bool { return strings.TrimSpace(p) != "" }) {
+			errs = append(errs, errors.New("add a folder or zip file to import from"))
+		}
+		if f.DateMode != "" && strings.TrimSpace(f.Date) == "" {
+			errs = append(errs, errors.New("enter a date (YYYY, YYYY-MM or YYYY-MM-DD), or choose to use each file's own date"))
+		}
+		if f.NameMode != "" && strings.TrimSpace(f.Name) == "" {
+			errs = append(errs, fmt.Errorf("enter the %s name, or choose dated folders only", f.NameMode))
+		}
+	case taskMaintain:
+		if !f.Sync && !f.Rehash && !f.Prune && !f.Reorganize {
+			errs = append(errs, errors.New("choose at least one maintenance task"))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("task must be %q or %q", taskImport, taskMaintain))
 	}
 	return errors.Join(errs...)
 }
